@@ -70,5 +70,56 @@ Commits on branch `ghidra-rare` (upstream `77e083f..`):
 7. `b662c3e` UNPKBW/UNPKBL/PKWB/PKLB without bit-range stores (crashed Ghidra's emulator).
 8. `bf16777` certification.manifest entries for the new files.
 
-Ghidra-Rare-only additions: `README.md`, this file, `build.gradle`, `extension.properties`,
-`ghidra_scripts/AlphaPALcodeEntries.java` and everything under `test/`.
+Second round (closing the known gaps; upstream had no issues or TODOs to address):
+
+9. Floating point (`alpha.sinc`, `alpha.pspec`):
+   - The S, F and G register layouts are mapped bit for bit by LDS/STS, ITOFS/FTOIS,
+     LDF/STF/ITOFF and LDG/STG; before, LDS/STS/ITOFS/FTOIS converted by value.
+   - The IEEE /C, /M and /D rounding modes are exact (error-free transformations), and so is
+     the -0 sign under /M.
+   - FPCR is a register, and the pspec tracks its start value.
+   - VAX F/G/D arithmetic, compares and conversions are real VAX arithmetic with VAX
+     rounding; before, VAX used IEEE p-code and CVT* were pcodeops.
+   - NEGF/NEGG keep a true zero.
+   - FP branches and FCMOVxx are bitwise.
+   - Found by the gap list. Checked by QEMU (IEEE) and an exact VAX model (QEMU's VAX helpers
+     are broken, see GHIDRA-RARE.md).
+10. MVI MIN/MAX/PERR are per-element p-code (were pcodeops). Checked against QEMU.
+11. BSR/JSR set `ra` again after the call op, so the decompiler folds the post-call
+    `ldgp gp,0(ra)`. Lost switch tables in the Debian samples went from 102 to 47, and `in_r`
+    inputs in libc from 413 to 119.
+12. `AlphaLdgpEntryAnalyzer`: the `ldgp` prologue entry becomes an 8-byte thunk of the
+    post-`ldgp` body. Before, there were two overlapping functions per procedure (1,448 pairs
+    in libc).
+13. Relocatable objects: GPDISP, LITERAL (artificial `%got`), GPREL16/32, GPRELHIGH/LOW and
+    BRSGP are applied (`Alpha_ElfRelocationContext`). Checked with `test/reloc-check.sh` on
+    `test/elf/relocs.s`.
+14. cspecs:
+    - The six argument slots are shared between a0-a5 and f16-f21 (`<group>`).
+    - NT and VMS use 32-bit pointers.
+    - The VMS cspec has a stack argument area and float outputs.
+    - The NT cspec has `__cdecl`/`__fastcall`/`__thiscall` aliases.
+    - The NT killed-by-call list had f28 twice and no f29.
+15. Windows NT PE support:
+    - Opinion for IMAGE_FILE_MACHINE_ALPHA/ALPHA64.
+    - `AlphaPeAnalyzer`: functions from `.pdata`, 32-bit IAT entries.
+    - `AlphaNtImportThunkAnalyzer`: import stubs become thunks.
+    - Found by importing MiKTeX's NT/AXP binaries.
+16. OpenVMS: the gp analyzer seeds `PV` with each procedure's descriptor (it skipped VMS
+    entirely before). Found with Info-ZIP UnZip for VMS AXP.
+17. `tests/`: upstream's expected disassembly was updated where the module now follows
+    objdump/MAME. The changes are:
+    - 21064 HW_LD/HW_ST mode spellings.
+    - FETCH/ECB/WH64 with Ra≠31 are invalid.
+    - RPCC prints its Rb.
+    - The OS-specific CALL_PAL 0x20 names (`LDA2.asmVMS`, `LDA2.asmNT`).
+    - EV4/EV5 PALcode words are invalid on EV6.
+    - A no-op 21064 HW_MTPR.
+
+    `test/upstream-tests.sh` runs them with Ghidra (36/36).
+18. README.md: the 15 languages, install steps (release zips, build), tests and known
+    limitations (it said three processors, and the install was symlink-only).
+
+Ghidra-Rare-only additions: `GHIDRA-RARE.md`, this file, `build.gradle`, `extension.properties`,
+`ghidra_scripts/AlphaPALcodeEntries.java`, the analyzers and relocation context named above,
+and everything under `test/`.

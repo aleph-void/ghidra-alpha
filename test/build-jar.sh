@@ -17,5 +17,7 @@ trap 'rm -rf "$OUT"' EXIT
 mkdir -p "$MOD/lib"
 JAR=jar
 [[ -n ${JAVA_HOME:-} ]] && JAR=$JAVA_HOME/bin/jar
-"$JAR" cf "$MOD/lib/Alpha.jar" -C "$OUT" .
+# build next to the jar and rename it into place, so running Ghidra JVMs keep the old file
+"$JAR" cf "$MOD/lib/Alpha.jar.new" -C "$OUT" .
+mv "$MOD/lib/Alpha.jar.new" "$MOD/lib/Alpha.jar"
 echo "built $MOD/lib/Alpha.jar"

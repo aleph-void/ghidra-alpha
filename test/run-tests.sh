@@ -12,6 +12,8 @@
 #   JAVA_HOME           a JDK with javac (for lib/Alpha.jar)
 #   QEMU_ALPHA          qemu-alpha user-mode emulator (default: qemu-alpha on PATH; skipped
 #                       when missing)
+#   ALPHA_LD            GNU ld configured --target=alpha-linux-gnu, for the relocation check
+#                       (default: alpha-linux-gnu-ld on PATH; skipped when missing)
 # Real binaries (Debian alpha packages) are separate: test/fetch-real-samples.sh and
 # test/real-binaries.sh.
 set -euo pipefail
@@ -56,4 +58,12 @@ if command -v "$QEMU_ALPHA" >/dev/null; then
 	done
 else
 	echo "   (skipped: $QEMU_ALPHA not found)"
+fi
+
+echo "== relocation handler: test/elf/relocs.o vs GNU ld (alpha-linux-gnu)"
+LD_ALPHA=${ALPHA_LD:-$(command -v alpha-linux-gnu-ld || true)}
+if [[ -n $LD_ALPHA ]]; then
+	"$HERE/reloc-check.sh" "$LD_ALPHA" "$W/reloc" "$HERE/elf/relocs.o"
+else
+	echo "   (skipped: set ALPHA_LD to binutils' alpha-linux-gnu-ld)"
 fi

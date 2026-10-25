@@ -134,6 +134,58 @@ T("negt_zero", [fp(0x16, 0x0a1, 31, 1, 2), fp(0x16, 0x0a1, 31, 3, 4)],
   "f1=0,f3=3ff0000000000000", "f2=0,f4=bff0000000000000")   # SUBT F31,+0 = +0, not -0
 T("fbeq_fcmov", [fp(0x17, 0x02a, 1, 2, 3), bra(0x31, 1, 1), ADDQi("t1", 1, "t1"), NOP],
   "f1=8000000000000000,f2=4000000000000000,f3=0,t1=0", "f3=4000000000000000,t1=0")   # -0.0 == 0
+# ---- MVI (byte/word min/max, pixel error) ----
+T("mvi_min_max", [opr(0x1c, 0x3a, "t0", "t1", "t2"), opr(0x1c, 0x3e, "t0", "t1", "t3"),
+                  opr(0x1c, 0x39, "t0", "t1", "t4"), opr(0x1c, 0x3d, "t0", "t1", "t5")],
+  "t0=01ff7f8000102030,t1=02fe807f00112f31",
+  "t2=01fe7f7f00102030,t3=02ff7f7f00112f31,t4=01ff807f00102030,t5=02fe807f00112f31")
+T("mvi_perr", [opr(0x1c, 0x31, "t0", "t1", "t2")], "t0=01ff7f8000102030,t1=02fe807f00112f31", "t2=15")
+# ---- register formats: bit-exact S, F and G moves ----
+# LDS maps S bits to the T layout (exponent 255 -> 2047, a denormal keeps exponent 0); STS maps back
+T("lds_sts_bits", [mem(0x22, 1, 0, "t0"), mem(0x22, 2, 4, "t0"), mem(0x26, 1, 8, "t0"), mem(0x26, 2, 12, "t0")],
+  f"t0={DATA + 0x40:x},m8:{DATA + 0x40:x}=000000017fc12345",
+  f"f1=7ff82468a0000000,f2=20000000,m8:{DATA + 0x48:x}=000000017fc12345")
+T("itofs_ftois_bits", [fp(0x14, 0x004, R["t0"], 31, 1), opr(0x1c, 0x78, 1, 31, "t1")],
+  "t0=ffffffff80000001", "f1=8000000020000000,t1=ffffffff80000001")   # -denormal, sign-extended back
+# VAX F 1.0 is 0x4080 in its first word; VAX G 1.0 is word 0x4010 first
+T("ldf_stf_ldg_stg", [mem(0x20, 1, 0, "t0"), mem(0x21, 2, 8, "t0"), mem(0x24, 1, 16, "t0"), mem(0x25, 2, 24, "t0")],
+  f"t0={DATA + 0x60:x},m4:{DATA + 0x60:x}=4080,m8:{DATA + 0x68:x}=4010",
+  f"f1=4010000000000000,f2=4010000000000000,m4:{DATA + 0x70:x}=4080,m8:{DATA + 0x78:x}=4010")
+# ---- VAX arithmetic (G-layout registers): 1.0 + 2.0, 1.5 * 2.0 (F), compares, conversions ----
+T("vax_addg_mulf_cmpglt", [fp(0x15, 0x0a0, 1, 2, 3), fp(0x15, 0x082, 4, 2, 5), fp(0x15, 0x0a6, 1, 2, 6)],
+  "f1=4010000000000000,f2=4020000000000000,f4=4018000000000000",
+  "f3=4028000000000000,f5=4028000000000000,f6=4000000000000000")
+T("vax_ties", [fp(0x15, 0x0a0, 1, 2, 3), fp(0x15, 0x020, 1, 2, 4), fp(0x15, 0x080, 1, 5, 6)],
+  "f1=4010000000000000,f2=3cc0000000000000,f5=3e90000000000000",
+  "f3=4010000000000001,f4=4010000000000000,f6=4010000020000000")
+  # 1 + 2^-53 (G) and 1 + 2^-24 (F) are exact halfway cases: VAX rounds them away from zero; /C chops
+T("vax_cvtgq_round", [fp(0x15, 0x0af, 31, 1, 2), fp(0x15, 0x02f, 31, 1, 3), fp(0x15, 0x0af, 31, 4, 5)],
+  "f1=4024000000000000,f4=c024000000000000",
+  "f2=3,f3=2,f5=fffffffffffffffd")       # 2.5 -> 3 (VAX rounds ties away), /C -> 2; -2.5 -> -3
+T("vax_cvtdg_cvtgd", [fp(0x15, 0x09e, 31, 1, 2), fp(0x15, 0x0ad, 31, 2, 3)],
+  "f1=4080000000000000", "f2=4010000000000000,f3=4080000000000000")   # D 1.0 <-> G 1.0
+T("vax_negg_zero", [fp(0x15, 0x0a1, 31, 1, 2), fp(0x15, 0x0a1, 31, 3, 4)],
+  "f1=0,f3=4010000000000000", "f2=0,f4=c010000000000000")   # -(0) stays a true zero
+# ---- IEEE rounding modes ----
+T("divt_rounding", [fp(0x16, 0x0a3, 1, 2, 3), fp(0x16, 0x023, 1, 2, 4), fp(0x16, 0x063, 1, 2, 5),
+                    fp(0x17, 0x024, 6, 6, 6), fp(0x16, 0x0e3, 7, 2, 8)],
+  "f1=bff0000000000000,f2=4008000000000000,f6=0c00000000000000,f7=3ff0000000000000",
+  "f3=bfd5555555555555,f4=bfd5555555555555,f5=bfd5555555555556,f8=3fd5555555555556")
+  # -1/3 normal and /C: ...555; /M: toward -inf ...556; 1/3 with FPCR DYN=+inf (/D): ...556
+T("adds_rounding", [fp(0x16, 0x000, 1, 2, 3), fp(0x17, 0x024, 6, 6, 6), fp(0x16, 0x0c0, 1, 2, 4)],
+  "f1=3ff0000000000000,f2=3e10000000000000,f6=0c00000000000000",
+  "f3=3ff0000000000000,f4=3ff0000020000000")   # 1 + 2^-30 in single: /C -> 1.0, +inf -> 1 + 2^-23
+T("cvttq_rounding", [fp(0x16, 0x0af, 31, 1, 2), fp(0x16, 0x0af, 31, 3, 4), fp(0x16, 0x06f, 31, 5, 6),
+                     fp(0x16, 0x02f, 31, 5, 7)],
+  "f1=4004000000000000,f3=400c000000000000,f5=c004000000000000",
+  "f2=2,f4=4,f6=fffffffffffffffd,f7=fffffffffffffffe")   # 2.5 -> 2, 3.5 -> 4 (even); -2.5 /M -> -3, /C -> -2
+T("cvtqt_rounding", [fp(0x16, 0x0be, 31, 1, 2), fp(0x17, 0x024, 6, 6, 6), fp(0x16, 0x0fe, 31, 1, 3)],
+  "f1=20000000000001,f6=0c00000000000000",
+  "f2=4340000000000000,f3=4340000000000001")   # 2^53 + 1: nearest even 2^53, +inf 2^53 + 2
+T("mt_mf_fpcr", [fp(0x17, 0x024, 1, 1, 1), fp(0x17, 0x025, 2, 2, 2)],
+  "f1=0800000000000000", "f2=0800000000000000,FPCR=0800000000000000")
+# ---- floating branches test register bits ----
+T("fblt_nan", [bra(0x32, 1, 1), ADDQi("t1", 1, "t1"), NOP], "f1=fff8000000000000,t1=0", "t1=0")   # sign set, not zero: taken
 
 def main():
     out = sys.argv[1]

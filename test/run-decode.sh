@@ -6,15 +6,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 W=$(readlink -m "$1"); mkdir -p "$W"; cd "$W"
 : "${OBJDUMP:=$HOME/.cache/ghidra-rare-scratch/tools/binutils-all/bin/objdump}"
 : "${BINUTILS_SRC:=$HOME/.cache/ghidra-rare-scratch/tools/bu/binutils-2.45}"
-: "${BINUTILS_BUILD:=$HOME/.cache/ghidra-rare-scratch/tools/bu-all-build}"
-# GNU binutils' alpha opcode table (alpha-opc.c), dumped from the built libopcodes. It is
-# generated here rather than committed (binutils is GPL).
+# GNU binutils' alpha opcode table (alpha-opc.c), dumped from an installed libopcodes
+# (test/build-dumpopc.sh; BINUTILS_SRC, BINUTILS_LIB and LIBIBERTY select it). It is generated
+# here rather than committed (binutils is GPL).
 if [[ -z ${ALPHA_OPC:-} ]]; then
 	ALPHA_OPC=$W/alpha-opc.txt
-	B=$BINUTILS_BUILD
-	gcc -I"$BINUTILS_SRC/include" "$HERE/dumpopc.c" "$B/opcodes/.libs/libopcodes.a" \
-		"$B/bfd/.libs/libbfd.a" "$B/libiberty/libiberty.a" "$B/libsframe/.libs/libsframe.a" \
-		-lz -lzstd -o "$W/dumpopc"
+	"$HERE/build-dumpopc.sh" "$W/dumpopc"
 	"$W/dumpopc" alpha >"$ALPHA_OPC"
 fi
 export ALPHA_OPC

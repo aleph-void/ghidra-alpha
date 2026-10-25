@@ -76,8 +76,15 @@ public class AlphaNtImportThunkAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
+		makeThunks(program, program.getFunctionManager().getFunctions(set, true), monitor, log);
+		return true;
+	}
+
+	/** turn every import stub among functions into a thunk of its import */
+	static void makeThunks(Program program, Iterable<Function> functions, TaskMonitor monitor,
+			MessageLog log) throws CancelledException {
 		ReferenceManager rm = program.getReferenceManager();
-		for (Function f : program.getFunctionManager().getFunctions(set, true)) {
+		for (Function f : functions) {
 			monitor.checkCancelled();
 			if (f.isThunk()) {
 				continue;
@@ -105,6 +112,5 @@ public class AlphaNtImportThunkAnalyzer extends AbstractAnalyzer {
 				break;
 			}
 		}
-		return true;
 	}
 }

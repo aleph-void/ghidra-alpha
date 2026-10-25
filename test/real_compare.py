@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare Ghidra's disassembly of a real binary (RealCheck.java listing) with objdump -d.
 
-  real_compare.py <ghidra.lst> <objdump-d.txt> [examples] [address-delta]
+  real_compare.py <ghidra.lst> <objdump-d.txt> [examples] [address-delta] [unix|nt|vms]
 
 Every instruction Ghidra found is looked up at the same address (minus address-delta, the
 image base Ghidra rebased a shared object to) in objdump's output and compared with the
@@ -15,6 +15,15 @@ import compare as C
 gfile, ofile = sys.argv[1], sys.argv[2]
 nex = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 delta = int(sys.argv[4], 0) if len(sys.argv) > 4 else 0
+# register names Ghidra prints (the language's OS) and objdump prints (OpenVMS images: the VMS
+# names; everything else: the OSF/1 names)
+if len(sys.argv) > 5:
+    osn = sys.argv[5]
+    C.GMAP = {n: f"r{i}" for i, n in enumerate({"unix": C.UNIX, "nt": C.NT, "vms": C.VMS}[osn])}
+    C.GMAP.update({"fzero": "f31", "fz": "f31"})
+    if osn == "vms":
+        C.OMAP = {n: f"r{i}" for i, n in enumerate(C.VMS)}
+        C.OMAP["at"] = "r28"           # objdump calls R28 AT in OpenVMS images
 o = {}
 for line in open(ofile):
     m = re.match(r"\s*([0-9a-f]+):\t([0-9a-f ]+)\t(.*)$", line)

@@ -11,13 +11,15 @@ Each test block loads t0..t3 and f1..f3 from an input record, executes the instr
 test (sources t0/t1/zero or f1/f2/f31, destination t2/t3 or f3), and stores t0..t3, f1..f3 to
 an output record. At the end the program writes the output area to stdout (callsys write) and
 exits. QemuDiff.java runs the same image in Ghidra's emulator up to the write and dumps the
-same area. Floating-point inputs are normal doubles of moderate magnitude so that unqualified
-IEEE instructions do not trap; rounding-mode and trap qualifiers are not exercised.
+same area. Floating-point inputs are normal values of moderate magnitude so that no instruction
+traps. IEEE instructions are tested in every rounding mode (none, /C, /M, /D); each test sets
+FPCR from its input record first, with a random dynamic rounding mode. VAX F/G/D instructions get
+VAX-format inputs and are tested with and without /C. Trap qualifiers are not exercised.
 """
 import os, random, struct, sys
 
 BASE = 0x10000000
-REC = 56                      # 4 integer + 3 FP quadwords
+REC = 64                      # 4 integer + 3 FP quadwords + FPCR
 T0, T1, T2, T3, S0, S1, V0, A0, A1, A2, ZERO = 1, 2, 3, 4, 9, 10, 0, 16, 17, 18, 31
 
 def mem(op, ra, disp, rb):
@@ -35,15 +37,41 @@ def load_addr(reg, addr):
     return [mem(LDAH, reg, hi, ZERO), mem(LDA, reg, lo, reg)]
 
 # operate-format opcodes whose results are architecturally defined and modelled in p-code
-# (MVI byte/word min/max/PERR are pcodeops; AMASK/IMPLVER are implementation specific)
+# (AMASK/IMPLVER are implementation specific)
 INT_OPS = {0x10, 0x11, 0x12, 0x13, 0x1c}
-SKIP = {"amask", "implver", "perr", "minsb8", "minsw4", "minub8", "minuw4", "maxub8", "maxuw4",
-        "maxsb8", "maxsw4", "itoff"}
-FP_OK = {"addt", "subt", "mult", "divt", "adds", "subs", "muls", "divs", "cmpteq", "cmptlt",
-         "cmptle", "cmptun", "cvtqt", "cvtqs", "cvttq/c", "cvtts", "cpys", "cpysn", "cpyse",
+SKIP = {"amask", "implver"}
+FP_OK = {"cmpteq", "cmptlt", "cmptle", "cmptun", "cpys", "cpysn", "cpyse",
          "cvtlq", "cvtql", "fcmoveq", "fcmovne", "fcmovlt", "fcmovge", "fcmovle", "fcmovgt",
-         "itoft", "itofs", "sqrtt", "sqrts", "ftoit", "fmov", "fneg", "fabs", "fclr",
-         "negt", "negs", "fnop", "unpkbw", "pkwb"}
+         "itoft", "itofs", "itoff", "ftoit", "fmov", "fneg", "fabs", "fclr",
+         "negt", "negs", "fnop", "unpkbw", "pkwb", "cvtst", "negf", "negg"}
+# IEEE operations: every rounding mode (no qualifier, /c, /m, /d)
+IEEE_RND = {"adds", "subs", "muls", "divs", "addt", "subt", "mult", "divt", "sqrts", "sqrtt",
+            "cvtts", "cvttq", "cvtqs", "cvtqt"}
+# VAX operations: normal and chopped rounding
+VAX_RND = {"addf", "subf", "mulf", "divf", "addg", "subg", "mulg", "divg", "sqrtf", "sqrtg",
+           "cvtgf", "cvtgq", "cvtqf", "cvtqg", "cmpgeq", "cmpglt", "cmpgle"}
+# (QEMU does not implement the D-format conversions CVTDG/CVTGD; emu_tests.py covers them)
+VAX_F_IN = {"addf", "subf", "mulf", "divf", "sqrtf"}       # F-precision operands
+
+def fp_ok(name):
+    base, _, q = name.partition("/")
+    if name in FP_OK:
+        return True
+    if base in IEEE_RND:
+        return q in ("", "c", "m", "d")
+    if base in VAX_RND:
+        return q in ("", "c")
+    return False
+
+def g_bits(x):
+    """IEEE double value -> VAX G register bits (moderate magnitudes only)."""
+    if x == 0:
+        return 0
+    return struct.unpack("<Q", struct.pack("<d", x))[0] + (2 << 52)
+
+def d_bits(rng):
+    """random VAX D register bits: sign, exponent 100..156, 55-bit fraction"""
+    return rng.getrandbits(1) << 63 | rng.randint(100, 156) << 55 | rng.getrandbits(55)
 
 ZA, ZB, ZC, RBA, RCA = 7, 8, 9, 12, 13    # binutils alpha_operands[] indices (see gen_corpus.py)
 
@@ -57,7 +85,7 @@ def gen(opc, out, count, seed):
         major = op >> 26
         if flags & 0xe or name.endswith("/v") or "/sv" in name:
             continue           # PALcode; integer-overflow traps would kill the run
-        if major in INT_OPS and name not in SKIP or major in (0x14, 0x16, 0x17) and name in FP_OK \
+        if major in INT_OPS and name not in SKIP or major in (0x14, 0x15, 0x16, 0x17) and fp_ok(name) \
                 or name in ("ftoit", "ftois"):
             entries.append((name, op, mask, operands))
     code = []
@@ -70,13 +98,13 @@ def gen(opc, out, count, seed):
     for i in range(count):
         name, op, mask, operands = entries[i % len(entries)]
         w = op
-        fpop = (op >> 26) in (0x14, 0x16, 0x17) or name in ("ftoit", "ftois")
+        fpop = (op >> 26) in (0x14, 0x15, 0x16, 0x17) or name in ("ftoit", "ftois")
         for lo, choices in ((21, [T0, T1, ZERO]), (16, [T0, T1, ZERO]), (0, [T2, T3])):
             if (mask >> lo) & 31 == 0:
                 c = choices
                 if fpop:
                     c = {21: [1, 2, 31], 16: [1, 2, 31], 0: [3]}[lo]
-                    if name in ("itoft", "itofs") and lo == 21:
+                    if name in ("itoft", "itofs", "itoff") and lo == 21:
                         c = [T0, T1]
                     if name in ("ftoit", "ftois") and lo == 0:
                         c = [T2, T3]
@@ -102,6 +130,8 @@ def gen(opc, out, count, seed):
             code.append(mem(LDQ, T0 + k, 8 * k, S0))
         for k in range(3):
             code.append(mem(LDT, 1 + k, 32 + 8 * k, S0))
+        code.append(mem(LDT, 4, 56, S0))
+        code.append(0x17 << 26 | 4 << 21 | 4 << 16 | 0x024 << 5 | 4)     # mt_fpcr f4
         code.append(w)
         for k in range(4):
             code.append(mem(STQ, T0 + k, 8 * k, S1))
@@ -116,16 +146,27 @@ def gen(opc, out, count, seed):
             v = rng.choice(specials) if rng.random() < 0.25 else rng.getrandbits(64)
             if rng.random() < 0.25:
                 v = rng.getrandbits(8)
-            if name == "itofs":   # the module converts by value: use normal single-precision bits
-                v = struct.unpack("<I", struct.pack("<f", rng.uniform(-1e6, 1e6)))[0]
             data += struct.pack("<Q", v)
+        base = name.split("/")[0]
         for k in range(3):
             x = rng.choice([1.0, -2.5, 3.0, 0.5]) if rng.random() < 0.2 else rng.uniform(-1e6, 1e6)
-            if name.startswith("sqrt"):
+            if base.startswith("sqrt"):
                 x = abs(x)
-            if name.split("/")[0] in ("adds", "subs", "muls", "divs", "sqrts", "negs", "ftois"):
+            if base in ("cvttq", "cvtgq") and rng.random() < 0.3:
+                x = rng.randint(-1000, 1000) + 0.5          # exact halfway cases
+            if base in ("adds", "subs", "muls", "divs", "sqrts", "negs", "ftois", "cvtst") or \
+                    base in VAX_F_IN or base == "negf":
                 x = struct.unpack("<f", struct.pack("<f", x))[0]
-            data += struct.pack("<d", x)
+            if base in ("cvtqs", "cvtqt", "cvtqf", "cvtqg"):
+                bits = rng.getrandbits(64) if rng.random() < 0.5 else rng.getrandbits(rng.randint(20, 62))
+                data += struct.pack("<Q", bits)
+            elif base == "cvtdg":
+                data += struct.pack("<Q", d_bits(rng))
+            elif base in VAX_RND or base in ("negf", "negg"):
+                data += struct.pack("<Q", g_bits(x))
+            else:
+                data += struct.pack("<d", x)
+        data += struct.pack("<Q", rng.randrange(4) << 58)    # FPCR: dynamic rounding mode
     stop_index = len(code)
     code += [mem(LDA, V0, 4, ZERO), mem(LDA, A0, 1, ZERO)]
     code += load_addr(A1, 0)           # patched below
@@ -148,6 +189,7 @@ def gen(opc, out, count, seed):
     image[0:len(eh)] = eh
     image[64:64 + len(ph)] = ph
     open(f"{out}/qd.elf", "wb").write(image)
+    open(f"{out}/qd_in.bin", "wb").write(bytes(data))
     os.chmod(f"{out}/qd.elf", 0o755)
     with open(f"{out}/qd.txt", "w") as fh:
         fh.write(f"# stop 0x{BASE + hdr + 4 * stop_index:x} out 0x{outp:x} len {count * REC} "
@@ -158,6 +200,8 @@ def gen(opc, out, count, seed):
 
 def cmp(out, qfile, gfile, nex):
     from collections import Counter, defaultdict
+    import vax_model
+    inp = open(f"{out}/qd_in.bin", "rb").read()
     tests = [l.split() for l in open(f"{out}/qd.txt") if not l.startswith("#")]
     q, g = open(qfile, "rb").read(), open(gfile, "rb").read()
     names = ["t0", "t1", "t2", "t3", "f1", "f2", "f3"]
@@ -167,6 +211,17 @@ def cmp(out, qfile, gfile, nex):
     for i, name, w in tests:
         i = int(i)
         qv = struct.unpack_from("<7Q", q, i * REC)
+        base = name.split("/")[0]
+        if base in VAX_RND or base in ("negf", "negg", "itoff"):
+            # QEMU's VAX helpers are wrong (see vax_model.py): the destination f3 comes from the
+            # reference model instead
+            w_ = int(w, 16)
+            regs = struct.unpack_from("<8Q", inp, i * REC)
+            fr = {1: regs[4], 2: regs[5], 31: 0}
+            ir = {1: regs[0], 2: regs[1], 31: 0}
+            r = vax_model.model(name, fr.get((w_ >> 21) & 31, 0), fr.get((w_ >> 16) & 31, 0),
+                                ir.get((w_ >> 21) & 31, 0))
+            qv = qv[:6] + (r,)
         gv = struct.unpack_from("<7Q", g, i * REC)
         per[name] += 1
         if qv == gv:
@@ -175,7 +230,7 @@ def cmp(out, qfile, gfile, nex):
             d = [f"{names[k]}: qemu {qv[k]:x} ghidra {gv[k]:x}" for k in range(7) if qv[k] != gv[k]]
             bad[name].append((w, d))
     total = len(tests)
-    print(f"qemu vs ghidra: {ok}/{total} tests agree ({100 * ok / total:.2f}%), "
+    print(f"qemu (VAX: vax_model.py) vs ghidra: {ok}/{total} tests agree ({100 * ok / total:.2f}%), "
           f"{len(per)} mnemonics, {len(bad)} with differences")
     for name, v in sorted(bad.items(), key=lambda kv: -len(kv[1])):
         print(f"  [{len(v):4d}/{per[name]}] {name}")

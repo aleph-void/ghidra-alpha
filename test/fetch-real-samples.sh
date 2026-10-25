@@ -12,6 +12,13 @@
 #   busybox 1.38.0-3  busybox-static GPL-2       usr/bin/busybox (static)
 # and QEMU's EV6 PALcode for the emulated Clipper board (qemu-palcode, GPL-2.0+), shipped as
 # pc-bios/palcode-clipper in the QEMU source tree, tag v10.1.0: PALcode-only HW_* instructions.
+# Windows NT for Alpha (PE images, 32-bit pointers), from CTAN's archived MiKTeX 1.07 port to
+# NT/AXP (obsolete/systems/win32/miktex-AXP, Alexander Dong, 1997):
+#   miktex.dll, dvips.exe, bibtex.exe, makeindex.exe   MiKTeX/TeX tools, GPL (COPYING there)
+#   unzip.exe                                          Info-ZIP UnZip, Info-ZIP license (BSD-like)
+# (the Microsoft runtime DLLs in the same archive are not used)
+# OpenVMS Alpha: Info-ZIP UnZip 5.12 self-extractor for VMS AXP (unz512x-axp.exe, Info-ZIP
+# license), from NOAA GML's archive of the Info-ZIP distribution.
 set -euo pipefail
 DEST=${1:-real-samples}
 mkdir -p "$DEST"
@@ -46,6 +53,23 @@ if [[ ! -s palcode-clipper ]]; then
 		https://raw.githubusercontent.com/qemu/qemu/v10.1.0/pc-bios/palcode-clipper
 	mv palcode-clipper.part palcode-clipper
 fi
+if [[ ! -s exe107a.zip ]]; then
+	curl -fsSL --retry 3 -o exe107a.zip.part https://mirrors.ctan.org/obsolete/systems/win32/miktex-AXP/exe107a.zip
+	mv exe107a.zip.part exe107a.zip
+fi
+if [[ ! -s unzip.exe ]]; then
+	curl -fsSL --retry 3 -o unzip.exe.part https://mirrors.ctan.org/obsolete/systems/win32/miktex-AXP/unzip.exe
+	mv unzip.exe.part unzip.exe
+fi
+if [[ ! -s unz512x-axp.exe ]]; then
+	curl -fsSL --retry 3 -o unz512x-axp.exe.part \
+		https://gml.noaa.gov/aftp/aerosol/doc/software/archiver/vax_alpha/unz512x-axp.exe
+	mv unz512x-axp.exe.part unz512x-axp.exe
+fi
+echo "e863059605216c5277fa777160ce1936fe82ee7a5065603d53b690a86da01eff  exe107a.zip" | sha256sum -c -
+for f in miktex.dll dvips.exe bibtex.exe makeindex.exe; do
+	[[ -s $f ]] || unzip -p exe107a.zip "miktex/bin/$f" >"$f"
+done
 [[ -s libc.so.6.1 ]] || extract libc6.1_2.43-5_alpha.deb usr/lib/alpha-linux-gnu/libc.so.6.1 libc.so.6.1
 [[ -s libz.so.1.3.2 ]] || extract zlib1g_1.3.dfsg+really1.3.2-3_alpha.deb usr/lib/alpha-linux-gnu/libz.so.1.3.2 libz.so.1.3.2
 [[ -s ls ]] || extract coreutils_9.10-1_alpha.deb usr/bin/ls ls
@@ -58,4 +82,10 @@ cc1e8fea87b13de40aa54de6c474772538dc5c54ca6c1f85d39b18c059341a9d  libz.so.1.3.2
 715c3222feaf30be15b4188c54ee446a5cd026a69baea1aaa67cf3bced4b3f00  sort
 cf79d06bf4faf0d89b5360bb98552b0c5e91f908f454b0ee14be6b83344d9e58  busybox
 9f8da7264c7438fe4a24a2215e81893586f5cfafcd6e5fd0059fccc31a4e8839  palcode-clipper
+b7320979aa8065d86b8fea050320d59249d454354f361ed75b24c127912e894c  unzip.exe
+bd6e11fbd889b92054322a2d3c8d494ef423efe19c8ffd818a4e5db5aaac90a1  miktex.dll
+f8743dc5a558d971e293e0d651ee7cd4394f21f31431cf2059d33255e4377bec  dvips.exe
+86ae809d834e3c2ed2d884203ea7c14b67566fc4df2ba9434c8e17b6fdc4c796  bibtex.exe
+1dc992c69bd000362fe41e775007d0f0f9f0909f5d84bb69747c164ceb3feed7  makeindex.exe
+b141d7da9753991937ddbffddc1f978009dad0c0a502ede33f806892a5134d70  unz512x-axp.exe
 SUMS

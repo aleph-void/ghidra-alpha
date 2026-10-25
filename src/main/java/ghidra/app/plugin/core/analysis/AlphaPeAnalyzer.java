@@ -117,6 +117,8 @@ public class AlphaPeAnalyzer extends AbstractAnalyzer {
 			starts.add(b);
 		}
 		if (starts.isEmpty()) {
+			AlphaNtImportThunkAnalyzer.makeThunks(program,
+				program.getFunctionManager().getFunctions(true), monitor, log);
 			return true;
 		}
 		new DisassembleCommand(starts, null, true).applyTo(program, monitor);
@@ -126,6 +128,9 @@ public class AlphaPeAnalyzer extends AbstractAnalyzer {
 				new CreateFunctionCmd(a).applyTo(program, monitor);
 			}
 		}
+		// import stubs that already exist (later ones come through AlphaNtImportThunkAnalyzer)
+		AlphaNtImportThunkAnalyzer.makeThunks(program,
+			program.getFunctionManager().getFunctions(true), monitor, log);
 		return true;
 	}
 
