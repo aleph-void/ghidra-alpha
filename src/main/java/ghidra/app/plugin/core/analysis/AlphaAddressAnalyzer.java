@@ -147,6 +147,10 @@ public class AlphaAddressAnalyzer extends ConstantPropagationAnalyzer {
 			}
 		}
 
+		if (recoverGpFromPv) {
+			seedNoGpEntry(program, flowStart);
+		}
+
 		if (assumeGlobalGp) {
 			// $29 — global pointer (gp / GP depending on ABI)
 			Register gp = program.getLanguage().getRegister(regSpace, 29 * 8, 8);
@@ -154,6 +158,41 @@ public class AlphaAddressAnalyzer extends ConstantPropagationAnalyzer {
 			if (gp != null && gpValue != null) {
 				setContext(context, gp, flowStart, gpValue);
 			}
+		}
+	}
+
+	/**
+	 * gcc gives every procedure that sets up gp a second entry point just past its two-instruction
+	 * {@code ldgp} prologue ({@code ldah gp,hi($27); lda gp,lo(gp)}); calls from inside the same
+	 * module ({@code bsr}) enter there with the caller's gp, which is the value that prologue
+	 * computes. When a function starts right after such a prologue, seed gp with that value so
+	 * gp-relative references resolve in the second entry too.
+	 */
+	private static void seedNoGpEntry(Program program, Address entry) {
+		Function func = program.getFunctionManager().getFunctionAt(entry);
+		if (func == null || entry.getOffset() < 8) {
+			return;
+		}
+		Address prologue = entry.subtract(8);
+		int ldah, lda;
+		try {
+			ldah = program.getMemory().getInt(prologue);
+			lda = program.getMemory().getInt(entry.subtract(4));
+		}
+		catch (Exception e) {
+			return;
+		}
+		// ldah $29,hi($27) ; lda $29,lo($29)
+		if ((ldah >>> 26) != 0x09 || ((ldah >> 21) & 31) != 29 || ((ldah >> 16) & 31) != 27 ||
+			(lda >>> 26) != 0x08 || ((lda >> 21) & 31) != 29 || ((lda >> 16) & 31) != 29) {
+			return;
+		}
+		long gpValue = prologue.getOffset() + ((long) (short) (ldah & 0xffff) << 16) +
+			(short) (lda & 0xffff);
+		AddressSpace regSpace = program.getAddressFactory().getRegisterSpace();
+		Register gp = program.getLanguage().getRegister(regSpace, 29 * 8, 8);
+		if (gp != null) {
+			setContext(program.getProgramContext(), gp, entry, BigInteger.valueOf(gpValue));
 		}
 	}
 
