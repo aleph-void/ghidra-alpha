@@ -1,6 +1,8 @@
 # CALL_PAL functions of the Digital UNIX / Tru64 / Linux (OSF/1 PALcode) PALcode;
 # names from the Linux kernel asm/pal.h; rduniq/wruniq as GNU as spells them.
 # Included by alpha.sinc; HALT, DRAINA and IMB are common to all and defined there.
+# System calls and the thread-pointer functions model their register results; the rest are
+# do_call_pal (a call_pal pcodeop) and fall through.
 :CFLUSH       is opcode=0x00 & pcode=0x01 { do_call_pal(0x1:4); }
 :CSERVE       is opcode=0x00 & pcode=0x09 { do_call_pal(0x9:4); }
 :SWPPAL       is opcode=0x00 & pcode=0x0a { do_call_pal(0xa:4); }
@@ -26,9 +28,9 @@
 :RTI          is opcode=0x00 & pcode=0x3f { do_call_pal(0x3f:4); }
 :BPT          is opcode=0x00 & pcode=0x80 { do_call_pal(0x80:4); }
 :BUGCHK       is opcode=0x00 & pcode=0x81 { do_call_pal(0x81:4); }
-:CALLSYS      is opcode=0x00 & pcode=0x83 { do_call_pal(0x83:4); }
+:CALLSYS      is opcode=0x00 & pcode=0x83 { v0 = syscall(v0, a0, a1, a2, a3, a4, a5); a3 = syscall_error(); }
 :URTI         is opcode=0x00 & pcode=0x92 { do_call_pal(0x92:4); }
-:RDUNIQ       is opcode=0x00 & pcode=0x9e { do_call_pal(0x9e:4); }
-:WRUNIQ       is opcode=0x00 & pcode=0x9f { do_call_pal(0x9f:4); }
+:RDUNIQ       is opcode=0x00 & pcode=0x9e { v0 = read_unique(); }
+:WRUNIQ       is opcode=0x00 & pcode=0x9f { write_unique(a0); }
 :GENTRAP      is opcode=0x00 & pcode=0xaa { do_call_pal(0xaa:4); }
 :CLRFEN       is opcode=0x00 & pcode=0xae { do_call_pal(0xae:4); }
