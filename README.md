@@ -7,6 +7,8 @@
 
 # Alpha processor description for Ghidra
 
+[![Sponsor Aleph Void](https://img.shields.io/badge/Sponsor-Aleph%20Void-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/aleph-void)
+
 This implements the Digital (DEC) Alpha family of processors for
 [Ghidra](https://ghidra-sre.org)
 
