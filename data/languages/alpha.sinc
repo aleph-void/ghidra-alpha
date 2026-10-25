@@ -555,25 +555,22 @@ define pcodeop max_unsigned_words;
 :MAXSW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3f & Ra & op & Rc_lhs { Rc_lhs = max_signed_words(Ra, op); }
 
 # unpack low bytes to words / longwords; pack low byte of each word / longword
+# Written with shifts and masks: bit-range stores into a temporary crash Ghidra's emulator.
 :UNPKBW Rb, Rc_lhs is opcode=0x1c & ofunc=0x34 & rega=31 & Rb & Rc_lhs {
-  local r:8 = 0;
-  r[0,8] = Rb[0,8]; r[16,8] = Rb[8,8]; r[32,8] = Rb[16,8]; r[48,8] = Rb[24,8];
-  Rc_lhs = r;
+  local b:8 = Rb;
+  Rc_lhs = (b & 0xff) | ((b & 0xff00) << 8) | ((b & 0xff0000) << 16) | ((b & 0xff000000) << 24);
 }
 :UNPKBL Rb, Rc_lhs is opcode=0x1c & ofunc=0x35 & rega=31 & Rb & Rc_lhs {
-  local r:8 = 0;
-  r[0,8] = Rb[0,8]; r[32,8] = Rb[8,8];
-  Rc_lhs = r;
+  local b:8 = Rb;
+  Rc_lhs = (b & 0xff) | ((b & 0xff00) << 24);
 }
 :PKWB Rb, Rc_lhs is opcode=0x1c & ofunc=0x36 & rega=31 & Rb & Rc_lhs {
-  local r:8 = 0;
-  r[0,8] = Rb[0,8]; r[8,8] = Rb[16,8]; r[16,8] = Rb[32,8]; r[24,8] = Rb[48,8];
-  Rc_lhs = r;
+  local b:8 = Rb;
+  Rc_lhs = (b & 0xff) | ((b >> 8) & 0xff00) | ((b >> 16) & 0xff0000) | ((b >> 24) & 0xff000000);
 }
 :PKLB Rb, Rc_lhs is opcode=0x1c & ofunc=0x37 & rega=31 & Rb & Rc_lhs {
-  local r:8 = 0;
-  r[0,8] = Rb[0,8]; r[8,8] = Rb[32,8];
-  Rc_lhs = r;
+  local b:8 = Rb;
+  Rc_lhs = (b & 0xff) | ((b >> 24) & 0xff00);
 }
 
 # FIX: move S/T float register to integer register
