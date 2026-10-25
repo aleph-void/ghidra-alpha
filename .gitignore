@@ -7,4 +7,7 @@ core.*
 *.outUNIX
 *.outVMS
 /build/
-/lib/
+/lib/build/
+dist/
+.gradle/
+lib/
