@@ -412,11 +412,9 @@ define pcodeop prefetch;
 :CMPULT Ra, op, Rc_lhs is opcode=0x10 & ofunc=0x1d & Ra & op & Rc_lhs { Rc_lhs = zext(Ra < op); }
 
 # count bits
-define pcodeop count_leading_zeros;
-define pcodeop count_trailing_zeros;
-:CTLZ   Rb, Rc_lhs     is opcode=0x1c & ofunc=0x32 & rega=31 & Rb & Rc_lhs { Rc_lhs = count_leading_zeros(Rb); }
+:CTLZ   Rb, Rc_lhs     is opcode=0x1c & ofunc=0x32 & rega=31 & Rb & Rc_lhs { Rc_lhs = lzcount(Rb); }
 :CTPOP  Rb, Rc_lhs     is opcode=0x1c & ofunc=0x30 & rega=31 & Rb & Rc_lhs { Rc_lhs = popcount(Rb); }
-:CTTZ   Rb, Rc_lhs     is opcode=0x1c & ofunc=0x33 & rega=31 & Rb & Rc_lhs { Rc_lhs = count_trailing_zeros(Rb); }
+:CTTZ   Rb, Rc_lhs     is opcode=0x1c & ofunc=0x33 & rega=31 & Rb & Rc_lhs { local b:8 = Rb; Rc_lhs = popcount((b & -b) - 1); }
 
 # multiply
 :MULL      Ra, op, Rc_lhs is opcode=0x13 & ofunc=0x00 & Ra & op & Rc_lhs { Rc_lhs = sext(Ra:4 * op:4); }
@@ -780,38 +778,18 @@ define pcodeop cvt_q_to_g;
 :CVTQF^cvtqfqual Fb, Fc is opcode=0x15 & fp_lo=0x3c & cvtqfqual & fa=31 & Fb & Fc { Fc = cvt_q_to_f(Fb); }
 :CVTQG^cvtqfqual Fb, Fc is opcode=0x15 & fp_lo=0x3e & cvtqfqual & fa=31 & Fb & Fc { Fc = cvt_q_to_g(Fb); }
 
-# set complete bytes to zero
-macro zap(src, dest, bits) {
-  dest = src;
-  if ((bits & 0x01) == 0) goto <nozap0>;
-  dest[0,8] = 0;
-<nozap0>
-  if ((bits & 0x02) == 0) goto <nozap1>;
-  dest[8,8] = 0;
-<nozap1>
-  if ((bits & 0x04) == 0) goto <nozap2>;
-  dest[16,8] = 0;
-<nozap2>
-  if ((bits & 0x08) == 0) goto <nozap3>;
-  dest[24,8] = 0;
-<nozap3>
-  if ((bits & 0x10) == 0) goto <nozap4>;
-  dest[32,8] = 0;
-<nozap4>
-  if ((bits & 0x20) == 0) goto <nozap5>;
-  dest[40,8] = 0;
-<nozap5>
-  if ((bits & 0x40) == 0) goto <nozap6>;
-  dest[48,8] = 0;
-<nozap6>
-  if ((bits & 0x80) == 0) goto <nozap7>;
-  dest[56,8] = 0;
-<nozap7>
+# byte mask from the low 8 bits of op: byte i is 0xff when bit i is set. Written without
+# branches so a constant mask folds (ZAPNOT x,0xf becomes x & 0xffffffff).
+macro bytemask(bits, m) {
+  m = (zext((bits & 0x01) != 0) * 0x00000000000000ff) | (zext((bits & 0x02) != 0) * 0x000000000000ff00) |
+      (zext((bits & 0x04) != 0) * 0x0000000000ff0000) | (zext((bits & 0x08) != 0) * 0x00000000ff000000) |
+      (zext((bits & 0x10) != 0) * 0x000000ff00000000) | (zext((bits & 0x20) != 0) * 0x0000ff0000000000) |
+      (zext((bits & 0x40) != 0) * 0x00ff000000000000) | (zext((bits & 0x80) != 0) * 0xff00000000000000);
 }
 
 # zero bytes
-:ZAP    Ra, op, Rc_lhs is opcode=0x12 & ofunc=0x30 & Ra & op & Rc_lhs { zap(Ra, Rc_lhs, op); }
-:ZAPNOT Ra, op, Rc_lhs is opcode=0x12 & ofunc=0x31 & Ra & op & Rc_lhs { zap(Ra, Rc_lhs, op^0xff); }
+:ZAP    Ra, op, Rc_lhs is opcode=0x12 & ofunc=0x30 & Ra & op & Rc_lhs { local m:8; bytemask(op, m); Rc_lhs = Ra & ~m; }
+:ZAPNOT Ra, op, Rc_lhs is opcode=0x12 & ofunc=0x31 & Ra & op & Rc_lhs { local m:8; bytemask(op, m); Rc_lhs = Ra & m; }
 
 #=========================================================================
 # Floating-Point Instructions
