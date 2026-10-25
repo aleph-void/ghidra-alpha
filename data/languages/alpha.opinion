@@ -9,4 +9,10 @@
         <constraint primary="-28634" processor="Alpha" endian="little" size="64" variant="21264 (Unix)"/>
         <constraint primary="41"    processor="Alpha" endian="little" size="64" variant="21264 (Unix)"/>
     </constraint>
+    <!-- Windows NT for Alpha: PE32 images with IMAGE_FILE_MACHINE_ALPHA (0x184) and the unreleased
+         64-bit Windows (IMAGE_FILE_MACHINE_ALPHA64, 0x284). -->
+    <constraint loader="Portable Executable (PE)" compilerSpecID="default">
+        <constraint primary="388" processor="Alpha" endian="little" size="64" variant="21264 (Windows NT)"/>
+        <constraint primary="644" processor="Alpha" endian="little" size="64" variant="21264 (Windows NT)"/>
+    </constraint>
 </opinions>

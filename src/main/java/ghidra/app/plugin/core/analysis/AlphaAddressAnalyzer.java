@@ -105,10 +105,62 @@ public class AlphaAddressAnalyzer extends ConstantPropagationAnalyzer {
 			Processor.findOrPossiblyCreateProcessor(PROCESSOR_NAME))) {
 			return false;
 		}
-		// OpenVMS Alpha has no global pointer: $27 holds the address of the
-		// procedure descriptor rather than the entry point, and $29 is FP.
-		// Neither seed is meaningful, and both can create bogus references.
-		return !program.getLanguage().getLanguageID().getIdAsString().endsWith(":vms");
+		// OpenVMS Alpha has no global pointer: $27 holds the address of the procedure
+		// descriptor rather than the entry point, and $29 is FP. For VMS, $27 is seeded with
+		// the procedure descriptor instead (see seedVmsDescriptor).
+		return true;
+	}
+
+	private static boolean isVms(Program program) {
+		return program.getLanguage().getLanguageID().getIdAsString().endsWith(":vms");
+	}
+
+	/** entry address -> procedure descriptor address, per program (VMS) */
+	private final java.util.Map<Program, java.util.Map<Long, Long>> vmsDescriptors =
+		new java.util.WeakHashMap<>();
+
+	/**
+	 * OpenVMS procedure descriptors: a quadword-aligned structure whose first word holds the
+	 * flags (kind in bits 3:0: 8 null frame, 9 stack frame, 10 register frame) and whose
+	 * quadword at offset 8 is the entry address. Found by scanning initialized, non-executable
+	 * memory for such quadwords that point at code.
+	 */
+	private java.util.Map<Long, Long> descriptors(Program program) {
+		java.util.Map<Long, Long> m = vmsDescriptors.get(program);
+		if (m != null) {
+			return m;
+		}
+		m = new java.util.HashMap<>();
+		ghidra.program.model.mem.Memory mem = program.getMemory();
+		for (ghidra.program.model.mem.MemoryBlock b : mem.getBlocks()) {
+			if (!b.isInitialized() || !b.isLoaded()) {
+				continue;
+			}
+			long start = (b.getStart().getOffset() + 7) & ~7L;
+			for (long a = start; a + 16 <= b.getEnd().getOffset() + 1; a += 8) {
+				try {
+					Address pd = b.getStart().getNewAddress(a);
+					int kind = mem.getShort(pd) & 0xf;
+					if (kind < 8 || kind > 10) {
+						continue;
+					}
+					long entry = mem.getLong(pd.add(8));
+					if ((entry & 3) != 0) {
+						continue;
+					}
+					Address e = pd.getNewAddress(entry);
+					ghidra.program.model.mem.MemoryBlock eb = mem.getBlock(e);
+					if (eb != null && eb.isInitialized() && !m.containsKey(entry)) {
+						m.put(entry, a);
+					}
+				}
+				catch (Exception ex) {
+					// not a descriptor
+				}
+			}
+		}
+		vmsDescriptors.put(program, m);
+		return m;
 	}
 
 	@Override
@@ -134,6 +186,17 @@ public class AlphaAddressAnalyzer extends ConstantPropagationAnalyzer {
 	private void seedRegisters(Program program, Address flowStart) {
 		ProgramContext context = program.getProgramContext();
 		AddressSpace regSpace = program.getAddressFactory().getRegisterSpace();
+
+		if (isVms(program)) {
+			// $27 holds the procedure descriptor: its linkage section addresses are $27-based
+			Register pv = program.getLanguage().getRegister(regSpace, 27 * 8, 8);
+			Function func = program.getFunctionManager().getFunctionAt(flowStart);
+			Long pd = func == null ? null : descriptors(program).get(flowStart.getOffset());
+			if (pv != null && pd != null) {
+				setContext(context, pv, flowStart, BigInteger.valueOf(pd));
+			}
+			return;
+		}
 
 		if (recoverGpFromPv) {
 			// $27 — procedure value (pv / t12 / PV depending on ABI)
