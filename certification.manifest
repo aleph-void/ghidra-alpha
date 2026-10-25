@@ -82,3 +82,4 @@ tests/BRRZ.hex||LICENSE||||END|
 tests/BEQ.asmUNIX||LICENSE||||END|
 tests/ZAPNOT.asmNT||LICENSE||||END|
 tests/PALcode.asmNT21264||LICENSE||||END|
+ghidra_scripts/AlphaPALcodeEntries.java||LICENSE||||END|
