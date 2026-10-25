@@ -46,6 +46,18 @@ public class RealCheck extends GhidraScript {
 			}
 		}
 		sum.printf("blocks:%s%n", blocks);
+		// symbols the ELF loader placed in its fake EXTERNAL block (for linking a relocatable
+		// object at Ghidra's addresses in the relocation check)
+		StringBuilder ext = new StringBuilder();
+		for (ghidra.program.model.symbol.Symbol s : currentProgram.getSymbolTable()
+				.getAllSymbols(false)) {
+			MemoryBlock b = currentProgram.getMemory().getBlock(s.getAddress());
+			if (b != null && b.getName().equals(MemoryBlock.EXTERNAL_BLOCK_NAME) &&
+				s.isPrimary()) {
+				ext.append(String.format(" %s@%s", s.getName(), s.getAddress()));
+			}
+		}
+		sum.printf("external symbols:%s%n", ext);
 
 		// Instructions in executable blocks; also count instructions that fall through into
 		// defined data (disassembly running into data) and executable bytes left undefined.
