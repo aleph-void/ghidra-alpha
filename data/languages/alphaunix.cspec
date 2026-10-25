@@ -32,51 +32,64 @@
     <register name="ra"/>
   </returnaddress>
   <default_proto>
-    <!-- Arguments go in six slots, each either a0-a5 or f16-f21 by type; Ghidra cannot share
-         a slot between the two files, so floating-point arguments take f16-f21 in order. -->
     <prototype name="__stdcall" extrapop="0" stackshift="0" strategy="register">
       <input pointermax="8">
-        <pentry minsize="1" maxsize="8" metatype="float">
-          <register name="f16"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8" metatype="float">
-          <register name="f17"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8" metatype="float">
-          <register name="f18"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8" metatype="float">
-          <register name="f19"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8" metatype="float">
-          <register name="f20"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8" metatype="float">
-          <register name="f21"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8">
-          <register name="a0"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8">
-          <register name="a1"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8">
-          <register name="a2"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8">
-          <register name="a3"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8">
-          <register name="a4"/>
-        </pentry>
-        <pentry minsize="1" maxsize="8">
-          <register name="a5"/>
-        </pentry>
+        <!-- The six argument slots are each an integer register or the floating-point
+             register of the same number (a0/f16 ... a5/f21), by the argument's type; later
+             arguments go on the stack. -->
+        <group>
+          <pentry minsize="1" maxsize="8" metatype="float">
+            <register name="f16"/>
+          </pentry>
+          <pentry minsize="1" maxsize="8">
+            <register name="a0"/>
+          </pentry>
+        </group>
+        <group>
+          <pentry minsize="1" maxsize="8" metatype="float">
+            <register name="f17"/>
+          </pentry>
+          <pentry minsize="1" maxsize="8">
+            <register name="a1"/>
+          </pentry>
+        </group>
+        <group>
+          <pentry minsize="1" maxsize="8" metatype="float">
+            <register name="f18"/>
+          </pentry>
+          <pentry minsize="1" maxsize="8">
+            <register name="a2"/>
+          </pentry>
+        </group>
+        <group>
+          <pentry minsize="1" maxsize="8" metatype="float">
+            <register name="f19"/>
+          </pentry>
+          <pentry minsize="1" maxsize="8">
+            <register name="a3"/>
+          </pentry>
+        </group>
+        <group>
+          <pentry minsize="1" maxsize="8" metatype="float">
+            <register name="f20"/>
+          </pentry>
+          <pentry minsize="1" maxsize="8">
+            <register name="a4"/>
+          </pentry>
+        </group>
+        <group>
+          <pentry minsize="1" maxsize="8" metatype="float">
+            <register name="f21"/>
+          </pentry>
+          <pentry minsize="1" maxsize="8">
+            <register name="a5"/>
+          </pentry>
+        </group>
         <pentry minsize="1" maxsize="500" align="8">
           <addr offset="0" space="stack"/>
         </pentry>
       </input>
-      <output>
+            <output>
         <pentry minsize="1" maxsize="8" metatype="float">
           <register name="f0"/>
         </pentry>
