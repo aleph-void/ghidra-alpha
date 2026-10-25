@@ -7,6 +7,10 @@ data/languages/alphant.cspec||LICENSE||||END|
 data/languages/alphaunix.cspec||LICENSE||||END|
 data/languages/alphavms.cspec||LICENSE||||END|
 data/languages/alpha.ldefs||LICENSE||||END|
+data/languages/alpha_vms.dwarf||LICENSE||||END|
+data/languages/alpha_unix.dwarf||LICENSE||||END|
+data/languages/alpha_nt.dwarf||LICENSE||||END|
+data/languages/alpha.opinion||LICENSE||||END|
 data/languages/alpha.pspec||LICENSE||||END|
 data/languages/alpha.slaspec||LICENSE||||END|
 data/languages/alpha.sinc||LICENSE||||END|
