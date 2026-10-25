@@ -51,6 +51,9 @@ define register offset=0x200 size=8 [ PC ];
 # variables
 define register offset=0x208 size=8 [ loc ];
 
+# floating-point control register (MT_FPCR/MF_FPCR); bits 59:58 are the dynamic rounding mode
+define register offset=0x210 size=8 [ FPCR ];
+
 @if defined(21064)
 # 21064 Ibox registers
 define register offset=0x300 size=8 [ TB_TAG ITB_PTE ICCSR   ITB_PTE_TEMP EXC_ADDR SL_RCV ITBZAP  ITBASM
@@ -165,6 +168,7 @@ define token inst (32)
         fpfunc = ( 5, 15) # floating-point 11-bit function code
         fp_lo  = ( 5, 10) # FP function code <5:0>  (operation + precision)
         fp_hi  = (11, 15) # FP function code <10:6> (round/trap qualifier)
+        fprnd  = (11, 12) # FP rounding mode bits of the qualifier (0 /C, 1 /M, 2 normal, 3 /D)
 	paltmp = ( 7,  7) # 21064 PAL 19/1D ref to PALtemp
 	abx    = ( 6,  6) # 21064 PAL 19/1D ref to Abox
 	ibx    = ( 5,  5) # 21064 PAL 19/1D ref to Ibox
@@ -303,13 +307,13 @@ icc: "NE" is ccode=5 & is_i = 1 & Ra { tmp:1 = (Ra != 0); export tmp; }
 icc: "GE" is ccode=6 & is_i = 1 & Ra { tmp:1 = (Ra s>= 0); export tmp; }
 icc: "GT" is ccode=7 & is_i = 1 & Ra { tmp:1 = (Ra s> 0); export tmp; }
 
-# float condition codes (for branch)
-fcc: "EQ" is ccode=1 & is_i = 0 & Fa { tmp:1 = (Fa f== 0); export tmp; }
-fcc: "LT" is ccode=2 & is_i = 0 & Fa { tmp:1 = (Fa f< 0); export tmp; }
-fcc: "LE" is ccode=3 & is_i = 0 & Fa { tmp:1 = (Fa f<= 0); export tmp; }
-fcc: "NE" is ccode=5 & is_i = 0 & Fa { tmp:1 = (Fa f!= 0); export tmp; }
-fcc: "GE" is ccode=6 & is_i = 0 & Fa { tmp:1 = (Fa f>= 0); export tmp; }
-fcc: "GT" is ccode=7 & is_i = 0 & Fa { tmp:1 = (Fa f> 0); export tmp; }
+# float condition codes (for branch): tests on the register bits, valid for IEEE and VAX
+fcc: "EQ" is ccode=1 & is_i = 0 & Fa { tmp:1 = (Fa & 0x7fffffffffffffff) == 0; export tmp; }
+fcc: "LT" is ccode=2 & is_i = 0 & Fa { tmp:1 = (Fa s< 0) && ((Fa & 0x7fffffffffffffff) != 0); export tmp; }
+fcc: "LE" is ccode=3 & is_i = 0 & Fa { tmp:1 = (Fa s< 0) || ((Fa & 0x7fffffffffffffff) == 0); export tmp; }
+fcc: "NE" is ccode=5 & is_i = 0 & Fa { tmp:1 = (Fa & 0x7fffffffffffffff) != 0; export tmp; }
+fcc: "GE" is ccode=6 & is_i = 0 & Fa { tmp:1 = (Fa s>= 0) || ((Fa & 0x7fffffffffffffff) == 0); export tmp; }
+fcc: "GT" is ccode=7 & is_i = 0 & Fa { tmp:1 = (Fa s>= 0) && ((Fa & 0x7fffffffffffffff) != 0); export tmp; }
 
 #--------------------------------------------------------------------------
 # Mnemonics
@@ -371,7 +375,7 @@ define pcodeop prefetch;
 :BR           disp_pc is opcode=0x30 & rega=31 & disp_pc {                     goto disp_pc; }
 :BR   Ra_lhs, disp_pc is opcode=0x30 & Ra_lhs  & disp_pc { Ra_lhs = inst_next; goto disp_pc; }
 :BSR          disp_pc is opcode=0x34 & rega=31 & disp_pc {                     call disp_pc; }
-:BSR  Ra_lhs, disp_pc is opcode=0x34 & Ra_lhs  & disp_pc { Ra_lhs = inst_next; call disp_pc; }
+:BSR  Ra_lhs, disp_pc is opcode=0x34 & Ra_lhs  & disp_pc { Ra_lhs = inst_next; call disp_pc; Ra_lhs = inst_next; }
 
 # PC-relative branch conditional
 :BLBC  Ra, disp_pc is bcode=0x3 & is_i=1 & ccode=0 & Ra & disp_pc { if ((Ra & 1) == 0) goto disp_pc; }
@@ -381,9 +385,13 @@ define pcodeop prefetch;
 # jumps
 # The target comes from Rbv, the return address is written to Ra; latch the
 # target first since Ra and Rb may be the same register.
+# BSR and JSR set Ra again after the call op: a callee returns through Ra, so when control is
+# back at inst_next Ra holds inst_next. The decompiler then knows Ra after every call and folds
+# gcc's "ldgp gp,0(ra)" (ldah gp,hi(ra); lda gp,lo(gp)) to the constant gp. For the emulator the
+# second assignment writes the value Ra already holds.
 :JMP           (Rb)             is opcode=0x1a & jop = 0 & rega=31 & Rb & jdisp=0 { goto [Rb]; }
 :JMP           Ra_lhs,(Rb),hint is opcode=0x1a & jop = 0 & Ra_lhs  & Rb & hint    { local t=Rb; Ra_lhs = inst_next; goto [t]; }
-:JSR           Ra_lhs,(Rb),hint is opcode=0x1a & jop = 1 & Ra_lhs  & Rb & hint    { local t=Rb; Ra_lhs = inst_next; call [t]; }
+:JSR           Ra_lhs,(Rb),hint is opcode=0x1a & jop = 1 & Ra_lhs  & Rb & hint    { local t=Rb; Ra_lhs = inst_next; call [t]; Ra_lhs = inst_next; }
 :RET                            is opcode=0x1a & jop = 2 & rega=31 & regb=26 & Rb & jdisp=1 { return [Rb]; }
 :RET           (Rb)             is opcode=0x1a & jop = 2 & rega=31 & Rb & jdisp=0 { return [Rb]; }
 :RET           Ra_lhs,(Rb),rethint is opcode=0x1a & jop = 2 & Ra_lhs  & Rb & rethint    { local t=Rb; Ra_lhs = inst_next; return [t]; }
@@ -532,27 +540,69 @@ macro msk_h(rav, pos, rc, mask) { local sh:8 = (pos & 7) << 3; local m:16 = zext
 # Multimedia (MVI) and FIX extensions (opcode 0x1c)
 #=========================================================================
 
-# SIMD byte/word ops: per-element semantics are not expanded, so model them as
-# pcodeops that take the two source quadwords and produce the packed result.
-define pcodeop pixel_error;          # PERR  (sum of |byte differences|)
-define pcodeop min_signed_bytes;
-define pcodeop min_signed_words;
-define pcodeop min_unsigned_bytes;
-define pcodeop min_unsigned_words;
-define pcodeop max_signed_bytes;
-define pcodeop max_signed_words;
-define pcodeop max_unsigned_bytes;
-define pcodeop max_unsigned_words;
+# MVI byte/word minimum, maximum and pixel error, element by element. Written with shifts
+# and branch-free selects (bit-range stores into a temporary crash Ghidra's emulator).
+macro minu8(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:1 = ta:1; local y:1 = tb:1; local m:1 = y + zext(x < y) * (x - y); r = r | (zext(m) << sh); }
+macro maxu8(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:1 = ta:1; local y:1 = tb:1; local m:1 = y + zext(x > y) * (x - y); r = r | (zext(m) << sh); }
+macro mins8(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:1 = ta:1; local y:1 = tb:1; local m:1 = y + zext(x s< y) * (x - y); r = r | (zext(m) << sh); }
+macro maxs8(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:1 = ta:1; local y:1 = tb:1; local m:1 = y + zext(x s> y) * (x - y); r = r | (zext(m) << sh); }
+macro minu16(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:2 = ta:2; local y:2 = tb:2; local m:2 = y + zext(x < y) * (x - y); r = r | (zext(m) << sh); }
+macro maxu16(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:2 = ta:2; local y:2 = tb:2; local m:2 = y + zext(x > y) * (x - y); r = r | (zext(m) << sh); }
+macro mins16(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:2 = ta:2; local y:2 = tb:2; local m:2 = y + zext(x s< y) * (x - y); r = r | (zext(m) << sh); }
+macro maxs16(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:2 = ta:2; local y:2 = tb:2; local m:2 = y + zext(x s> y) * (x - y); r = r | (zext(m) << sh); }
+# |x - y| of one byte pair, added to the sum r
+macro perr8(a, b, sh, r) { local ta:8 = a >> sh; local tb:8 = b >> sh; local x:1 = ta:1; local y:1 = tb:1; local d:1 = zext(x >= y) * (x - y) + zext(x < y) * (y - x); r = r + zext(d); }
 
-:PERR   Ra, Rb, Rc_lhs is opcode=0x1c & ofunc=0x31 & Ra & Rb & is_lit=0 & Rc_lhs { Rc_lhs = pixel_error(Ra, Rb); }
-:MINSB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x38 & Ra & op & Rc_lhs { Rc_lhs = min_signed_bytes(Ra, op); }
-:MINSW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x39 & Ra & op & Rc_lhs { Rc_lhs = min_signed_words(Ra, op); }
-:MINUB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3a & Ra & op & Rc_lhs { Rc_lhs = min_unsigned_bytes(Ra, op); }
-:MINUW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3b & Ra & op & Rc_lhs { Rc_lhs = min_unsigned_words(Ra, op); }
-:MAXUB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3c & Ra & op & Rc_lhs { Rc_lhs = max_unsigned_bytes(Ra, op); }
-:MAXUW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3d & Ra & op & Rc_lhs { Rc_lhs = max_unsigned_words(Ra, op); }
-:MAXSB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3e & Ra & op & Rc_lhs { Rc_lhs = max_signed_bytes(Ra, op); }
-:MAXSW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3f & Ra & op & Rc_lhs { Rc_lhs = max_signed_words(Ra, op); }
+:PERR   Ra, Rb, Rc_lhs is opcode=0x1c & ofunc=0x31 & Ra & Rb & is_lit=0 & Rc_lhs {
+  local r:8 = 0;
+  perr8(Ra, Rb, 0, r); perr8(Ra, Rb, 8, r); perr8(Ra, Rb, 16, r); perr8(Ra, Rb, 24, r);
+  perr8(Ra, Rb, 32, r); perr8(Ra, Rb, 40, r); perr8(Ra, Rb, 48, r); perr8(Ra, Rb, 56, r);
+  Rc_lhs = r;
+}
+:MINSB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x38 & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  mins8(Ra, op, 0, r); mins8(Ra, op, 8, r); mins8(Ra, op, 16, r); mins8(Ra, op, 24, r);
+  mins8(Ra, op, 32, r); mins8(Ra, op, 40, r); mins8(Ra, op, 48, r); mins8(Ra, op, 56, r);
+  Rc_lhs = r;
+}
+:MINSW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x39 & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  mins16(Ra, op, 0, r); mins16(Ra, op, 16, r); mins16(Ra, op, 32, r); mins16(Ra, op, 48, r);
+  Rc_lhs = r;
+}
+:MINUB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3a & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  minu8(Ra, op, 0, r); minu8(Ra, op, 8, r); minu8(Ra, op, 16, r); minu8(Ra, op, 24, r);
+  minu8(Ra, op, 32, r); minu8(Ra, op, 40, r); minu8(Ra, op, 48, r); minu8(Ra, op, 56, r);
+  Rc_lhs = r;
+}
+:MINUW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3b & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  minu16(Ra, op, 0, r); minu16(Ra, op, 16, r); minu16(Ra, op, 32, r); minu16(Ra, op, 48, r);
+  Rc_lhs = r;
+}
+:MAXUB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3c & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  maxu8(Ra, op, 0, r); maxu8(Ra, op, 8, r); maxu8(Ra, op, 16, r); maxu8(Ra, op, 24, r);
+  maxu8(Ra, op, 32, r); maxu8(Ra, op, 40, r); maxu8(Ra, op, 48, r); maxu8(Ra, op, 56, r);
+  Rc_lhs = r;
+}
+:MAXUW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3d & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  maxu16(Ra, op, 0, r); maxu16(Ra, op, 16, r); maxu16(Ra, op, 32, r); maxu16(Ra, op, 48, r);
+  Rc_lhs = r;
+}
+:MAXSB8 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3e & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  maxs8(Ra, op, 0, r); maxs8(Ra, op, 8, r); maxs8(Ra, op, 16, r); maxs8(Ra, op, 24, r);
+  maxs8(Ra, op, 32, r); maxs8(Ra, op, 40, r); maxs8(Ra, op, 48, r); maxs8(Ra, op, 56, r);
+  Rc_lhs = r;
+}
+:MAXSW4 Ra, op, Rc_lhs is opcode=0x1c & ofunc=0x3f & Ra & op & Rc_lhs {
+  local r:8 = 0;
+  maxs16(Ra, op, 0, r); maxs16(Ra, op, 16, r); maxs16(Ra, op, 32, r); maxs16(Ra, op, 48, r);
+  Rc_lhs = r;
+}
 
 # unpack low bytes to words / longwords; pack low byte of each word / longword
 # Written with shifts and masks: bit-range stores into a temporary crash Ghidra's emulator.
@@ -573,16 +623,249 @@ define pcodeop max_unsigned_words;
   Rc_lhs = (b & 0xff) | ((b >> 24) & 0xff00);
 }
 
-# FIX: move S/T float register to integer register
+#=========================================================================
+# Floating-point register formats, rounding and VAX arithmetic
+#
+# Registers hold T (IEEE double) or G (VAX) format. S and F values are kept in the register in
+# T and G layout (Alpha Architecture Handbook 2.2.6, 4.7.x): the memory/integer formats are
+# mapped bit for bit, not converted by value, so denormals, NaN payloads and VAX operands
+# survive LDS/STS, ITOFS/FTOIS, LDF/STF and LDG/STG exactly.
+#
+# Arithmetic is computed in IEEE double p-code. The default (normal) rounding mode is plain
+# p-code. Chopped (/C), minus infinity (/M), plus infinity and dynamic (/D, from FPCR<59:58>)
+# rounding take the round-to-nearest result and step it by one unit in the last place when the
+# exact result lies on the other side; the sign of (exact - result) comes from error-free
+# transformations (TwoSum, Dekker product, division/square-root residuals). Trap qualifiers
+# (/U, /V, /S, /I) and the FPCR exception bits are not modelled.
+#
+# VAX F/G/D values are converted to IEEE double, computed, and converted back; VAX normal
+# rounding rounds exact ties away from zero.
+#=========================================================================
+
+# S (IEEE single) memory bits -> T register bits
+macro s2t(s, t) {
+  local e:1 = s[23,8];
+  local hi:1 = s[30,1];
+  local m3:8 = zext(e == 0xff) * 7 + zext(e != 0xff && e != 0 && hi == 0) * 7;
+  t = (zext(s[31,1]) << 63) | (zext(hi) << 62) | (m3 << 59) | (zext(s & 0x3fffffff) << 29);
+}
+# T register bits -> S memory bits
+macro t2s(t, s) {
+  local h:8 = (t >> 32) & 0xc0000000;
+  local l:8 = (t >> 29) & 0x3fffffff;
+  local v:8 = h | l;
+  s = v:4;
+}
+# F (VAX single) memory bits -> G-layout register bits
+macro f2g(x, g) {
+  local e:1 = x[7,8];
+  local hi:1 = x[14,1];
+  local m3:8 = zext(e != 0 && hi == 0) * 7;
+  g = (zext(x[15,1]) << 63) | (zext(hi) << 62) | (m3 << 59) | (zext(x & 0x3fff) << 45) | (zext(x >> 16) << 29);
+}
+# G-layout register bits -> F memory bits
+macro g2f(g, x) {
+  local lo:8 = ((g >> 48) & 0xc000) | ((g >> 45) & 0x3fff);
+  local hi:8 = (g >> 29) & 0xffff;
+  local v:8 = (hi << 16) | lo;
+  x = v:4;
+}
+# G memory <-> register: the four 16-bit words are reversed
+macro gswap(x, g) {
+  g = (x << 48) | ((x & 0xffff0000) << 16) | ((x >> 16) & 0xffff0000) | (x >> 48);
+}
+
+# VAX G-layout bits -> IEEE double (exact; 0 for true zero and reserved operands)
+macro g2t(g, t) {
+  local e:8 = (g >> 52) & 0x7ff;
+  local big:8 = g - 0x0020000000000000;
+  local tiny:8 = (g + 0x0640000000000000) f* 0x3990000000000000:8;
+  t = zext(e >= 3) * big + zext(e == 1 || e == 2) * tiny;
+}
+# IEEE double -> VAX G-layout bits (exact; underflow gives 0, overflow is not modelled)
+macro t2g(t, g) {
+  local e:8 = (t >> 52) & 0x7ff;
+  local sc:8 = t f* 0x4630000000000000:8;
+  local esc:8 = (sc >> 52) & 0x7ff;
+  g = zext(e >= 3 && e <= 2045) * (t + 0x0020000000000000) +
+      zext(e < 3 && esc > 98) * (sc - 0x0620000000000000);
+}
+
+# rounding mode from the qualifier: 0 chopped, 1 minus infinity, 2 normal, 3 dynamic (FPCR)
+rmode: is fp_hi=0x00 { export 0:1; }
+rmode: is fp_hi=0x01 { export 1:1; }
+rmode: is fp_hi=0x02 { export 2:1; }
+rmode: is fp_hi=0x03 { local d:1 = FPCR[58,2]; export d; }
+rmode: is fp_hi=0x04 { export 0:1; }
+rmode: is fp_hi=0x05 { export 1:1; }
+rmode: is fp_hi=0x06 { export 2:1; }
+rmode: is fp_hi=0x07 { local d:1 = FPCR[58,2]; export d; }
+rmode: is fp_hi=0x0a { export 2:1; }
+rmode: is fp_hi=0x10 { export 0:1; }
+rmode: is fp_hi=0x12 { export 2:1; }
+rmode: is fp_hi=0x14 { export 0:1; }
+rmode: is fp_hi=0x15 { export 1:1; }
+rmode: is fp_hi=0x16 { export 2:1; }
+rmode: is fp_hi=0x17 { local d:1 = FPCR[58,2]; export d; }
+rmode: is fp_hi=0x1a { export 2:1; }
+rmode: is fp_hi=0x1c { export 0:1; }
+rmode: is fp_hi=0x1d { export 1:1; }
+rmode: is fp_hi=0x1e { export 2:1; }
+rmode: is fp_hi=0x1f { local d:1 = FPCR[58,2]; export d; }
+
+# e = (exact - r) for r = a + b rounded (TwoSum)
+macro err_add(a, b, r, e) {
+  local bb:8 = r f- a;
+  e = (a f- (r f- bb)) f+ (b f- bb);
+}
+# e = (exact - r) for r = a * b rounded (Dekker product, split constant 2^27 + 1)
+macro err_mul(a, b, r, e) {
+  local ca:8 = a f* 0x41a0000002000000:8;
+  local ah:8 = ca f- (ca f- a);
+  local al:8 = a f- ah;
+  local cb:8 = b f* 0x41a0000002000000:8;
+  local bh:8 = cb f- (cb f- b);
+  local bl:8 = b f- bh;
+  e = ((((ah f* bh) f- r) f+ (ah f* bl)) f+ (al f* bh)) f+ (al f* bl);
+}
+# e has the sign of (a / b - q) (residual a - q * b, sign corrected by b)
+macro err_div(a, b, q, e) {
+  local p:8 = q f* b;
+  local pe:8;
+  err_mul(q, b, p, pe);
+  local rem:8 = (a f- p) f- pe;
+  e = rem ^ (b & 0x8000000000000000);
+}
+# e has the sign of (sqrt(a) - q)
+macro err_sqrt(a, q, e) {
+  local p:8 = q f* q;
+  local pe:8;
+  err_mul(q, q, p, pe);
+  e = (a f- p) f- pe;
+}
+# e = i - r exactly, for the integer i converted to the double r (|i - r| is at most half a unit
+# in the last place of r, so it is exact in a double; r = 2^63 is the one value trunc cannot take)
+macro err_q(i, r, e) {
+  local big:1 = r f>= 0x43e0000000000000:8;
+  local bi:8 = zext(!big) * trunc(r) + zext(big) * 0x8000000000000000;
+  e = int2float(i - bi);
+}
+
+# Directed rounding of a double result r given e (sign of exact - r). tie: the exact value is
+# halfway between r and the next value away from zero (VAX rounds those away from zero).
+macro round_t(r, e, m, tie) {
+  local neg:1 = r s< 0;
+  local fin:1 = ((r & 0x7ff0000000000000) != 0x7ff0000000000000) && ((e & 0x7ff0000000000000) != 0x7ff0000000000000);
+  local ez:1 = (e & 0x7fffffffffffffff) == 0;
+  local eneg:1 = e s< 0;
+  local under:1 = fin && !ez && (eneg == neg);
+  local over:1 = fin && !ez && (eneg != neg);
+  local dec:1 = over && (m == 0 || (m == 1 && !neg) || (m == 3 && neg));
+  local inc:1 = under && ((m == 1 && neg) || (m == 3 && !neg) || tie);
+  r = r + zext(inc) - zext(dec);
+}
+# the same for a single result rs (4-byte bits); e is a double with the sign of exact - rs
+macro round_s(rs, e, m, tie) {
+  local neg:1 = rs s< 0;
+  local fin:1 = ((rs & 0x7f800000) != 0x7f800000) && ((e & 0x7ff0000000000000) != 0x7ff0000000000000);
+  local ez:1 = (e & 0x7fffffffffffffff) == 0;
+  local eneg:1 = e s< 0;
+  local under:1 = fin && !ez && (eneg == neg);
+  local over:1 = fin && !ez && (eneg != neg);
+  local dec:1 = over && (m == 0 || (m == 1 && !neg) || (m == 3 && neg));
+  local inc:1 = under && ((m == 1 && neg) || (m == 3 && !neg) || tie);
+  rs = rs + zext(inc) - zext(dec);
+}
+# Round a double result rd (with e = exact - rd) to single rs; es gets the sign of exact - rs.
+# Double has more than 2 * 24 + 2 bits, so rounding twice to nearest is exact here.
+macro to_s(rd, e, rs, es) {
+  rs = float2float(rd);
+  local d1:8 = rd f- float2float(rs);
+  local dz:1 = (d1 & 0x7fffffffffffffff) == 0;
+  es = zext(dz) * e + zext(!dz) * d1;
+}
+# tie test for a double result r with exact error e
+macro tie_t(r, e, tie) {
+  local ar:8 = r & 0x7fffffffffffffff;
+  local u:8 = (ar + 1) f- ar;
+  local ae:8 = e & 0x7fffffffffffffff;
+  tie = (ae f+ ae) f== u;
+}
+# tie test for a single result rs (es = exact - rs, exact when the double result was exact)
+macro tie_s(rs, es, exact, tie) {
+  local ar:4 = rs & 0x7fffffff;
+  local ar1:4 = ar + 1;
+  local u:8 = float2float(ar1) f- float2float(ar);
+  local ae:8 = es & 0x7fffffffffffffff;
+  tie = exact && ((ae f+ ae) f== u);
+}
+# Convert a double to a quadword integer: m 0 chopped, 1 minus, 2 nearest even, 3 plus,
+# 4 nearest with ties away from zero (VAX)
+macro cvt_q(x, res, m) {
+  local t:8 = trunc(x);
+  local fr:8 = x f- int2float(t);
+  local frz:1 = (fr & 0x7fffffffffffffff) == 0;
+  local xneg:1 = x s< 0;
+  local afr:8 = fr & 0x7fffffffffffffff;
+  local half:1 = afr f== 0x3fe0000000000000:8;
+  local gth:1 = afr f> 0x3fe0000000000000:8;
+  local up:1 = !frz && ((m == 2 && (gth || (half && (t & 1) == 1))) || (m == 4 && (gth || half)) ||
+                        (m == 1 && xneg) || (m == 3 && !xneg));
+  res = t + zext(up && !xneg) - zext(up && xneg);
+}
+
+# An exact zero sum of operands with opposite signs is -0 when rounding toward minus infinity
+# (+0 otherwise, which is what the round-to-nearest p-code gives).
+macro zero_sign(a, b, m, r) { r = r | (zext(m == 1 && (r & 0x7fffffffffffffff) == 0) * ((a | b) & 0x8000000000000000)); }
+# IEEE double operation with directed rounding: r = a OP b
+macro t_add(a, b, m, r) { r = a f+ b; local e:8; err_add(a, b, r, e); round_t(r, e, m, 0:1); zero_sign(a, b, m, r); }
+macro t_sub(a, b, m, r) { local nb:8 = b ^ 0x8000000000000000; r = a f+ nb; local e:8; err_add(a, nb, r, e); round_t(r, e, m, 0:1); zero_sign(a, nb, m, r); }
+macro t_mul(a, b, m, r) { r = a f* b; local e:8; err_mul(a, b, r, e); round_t(r, e, m, 0:1); }
+macro t_div(a, b, m, r) { r = a f/ b; local e:8; err_div(a, b, r, e); round_t(r, e, m, 0:1); }
+macro t_sqrt(a, m, r) { r = sqrt(a); local e:8; err_sqrt(a, r, e); round_t(r, e, m, 0:1); }
+# IEEE single operations: rd is the double result, e its error
+macro s_fin(rd, e, m, r) { local rs:4; local es:8; to_s(rd, e, rs, es); round_s(rs, es, m, 0:1); r = float2float(rs); }
+macro s_add(a, b, m, r) { local rd:8 = a f+ b; local e:8; err_add(a, b, rd, e); s_fin(rd, e, m, r); zero_sign(a, b, m, r); }
+macro s_sub(a, b, m, r) { local nb:8 = b ^ 0x8000000000000000; local rd:8 = a f+ nb; local e:8; err_add(a, nb, rd, e); s_fin(rd, e, m, r); zero_sign(a, nb, m, r); }
+macro s_mul(a, b, m, r) { local rd:8 = a f* b; local e:8; err_mul(a, b, rd, e); s_fin(rd, e, m, r); }
+macro s_div(a, b, m, r) { local rd:8 = a f/ b; local e:8; err_div(a, b, rd, e); s_fin(rd, e, m, r); }
+macro s_sqrt(a, m, r) { local rd:8 = sqrt(a); local e:8; err_sqrt(a, rd, e); s_fin(rd, e, m, r); }
+
+# VAX G operation (m 0 chopped, 2 normal): a, b, r are G-layout bits
+macro g_fin(rd, e, m, tieok, r) {
+  local tie:1; tie_t(rd, e, tie);
+  local t:1 = tieok && (m == 2) && tie;
+  round_t(rd, e, m, t);
+  t2g(rd, r);
+}
+macro g_add(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); local rd:8 = x f+ y; local e:8; err_add(x, y, rd, e); g_fin(rd, e, m, 1:1, r); }
+macro g_sub(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); y = y ^ 0x8000000000000000; local rd:8 = x f+ y; local e:8; err_add(x, y, rd, e); g_fin(rd, e, m, 1:1, r); }
+macro g_mul(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); local rd:8 = x f* y; local e:8; err_mul(x, y, rd, e); g_fin(rd, e, m, 1:1, r); }
+macro g_div(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); local rd:8 = x f/ y; local e:8; err_div(x, y, rd, e); g_fin(rd, e, m, 0:1, r); }
+macro g_sqrt(a, m, r) { local x:8; g2t(a, x); local rd:8 = sqrt(x); local e:8; err_sqrt(x, rd, e); g_fin(rd, e, m, 0:1, r); }
+# VAX F operation: double result rd with error e rounded to single precision, then G layout
+macro f_fin(rd, e, m, r) {
+  local rs:4; local es:8; to_s(rd, e, rs, es);
+  local ez:1 = (e & 0x7fffffffffffffff) == 0;
+  local tie:1; tie_s(rs, es, ez, tie);
+  local t:1 = (m == 2) && tie;
+  round_s(rs, es, m, t);
+  local rt:8 = float2float(rs);
+  t2g(rt, r);
+}
+macro f_add(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); local rd:8 = x f+ y; local e:8; err_add(x, y, rd, e); f_fin(rd, e, m, r); }
+macro f_sub(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); y = y ^ 0x8000000000000000; local rd:8 = x f+ y; local e:8; err_add(x, y, rd, e); f_fin(rd, e, m, r); }
+macro f_mul(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); local rd:8 = x f* y; local e:8; err_mul(x, y, rd, e); f_fin(rd, e, m, r); }
+macro f_div(a, b, m, r) { local x:8; g2t(a, x); local y:8; g2t(b, y); local rd:8 = x f/ y; local e:8; err_div(x, y, rd, e); f_fin(rd, e, m, r); }
+macro f_sqrt(a, m, r) { local x:8; g2t(a, x); local rd:8 = sqrt(x); local e:8; err_sqrt(x, rd, e); f_fin(rd, e, m, r); }
+
+# FIX: move S/T float register to integer register (bit moves)
 :FTOIT Fa, Rc_lhs is opcode=0x1c & ofunc=0x70 & Fa & regb=31 & Rc_lhs { Rc_lhs = Fa; }
-:FTOIS Fa, Rc_lhs is opcode=0x1c & ofunc=0x78 & Fa & regb=31 & Rc_lhs { local s:4 = float2float(Fa); Rc_lhs = sext(s); }
+:FTOIS Fa, Rc_lhs is opcode=0x1c & ofunc=0x78 & Fa & regb=31 & Rc_lhs { local s:4; t2s(Fa, s); Rc_lhs = sext(s); }
 
 #=========================================================================
 # Independent Floating-Point Instructions (opcode 0x17)
 #=========================================================================
-
-define pcodeop set_fpcr;
-define pcodeop get_fpcr;
 
 # copy sign / copy sign-and-exponent
 :FNOP  is opcode=0x17 & fpfunc=0x020 & fa=31 & fb=31 & fc=31 { }
@@ -602,39 +885,36 @@ macro cvtql(src, dst) { dst = (((src >> 30) & 3) << 62) | ((src & 0x3fffffff) <<
 :CVTQL^"/SV" Fb, Fc is opcode=0x17 & fpfunc=0x530 & fa=31 & Fb & Fc { cvtql(Fb, Fc); }
 
 # FPCR moves (Fa == Fb == Fc by convention)
-:MT_FPCR Fa is opcode=0x17 & fpfunc=0x024 & Fa & fa=fb & fa=fc { set_fpcr(Fa); }
-:MF_FPCR Fc is opcode=0x17 & fpfunc=0x025 & Fc & fa=fb & fa=fc { Fc = get_fpcr(); }
+:MT_FPCR Fa is opcode=0x17 & fpfunc=0x024 & Fa & fa=fb & fa=fc { FPCR = Fa; }
+:MF_FPCR Fc is opcode=0x17 & fpfunc=0x025 & Fc & fa=fb & fa=fc { Fc = FPCR; }
 
-# floating conditional move: move Fb into Fc if Fa meets the test
-:FCMOVEQ Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02a & Fa & Fb & Fc { cmov(Fa f== 0, Fc, Fb); }
-:FCMOVNE Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02b & Fa & Fb & Fc { cmov(Fa f!= 0, Fc, Fb); }
-:FCMOVLT Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02c & Fa & Fb & Fc { cmov(Fa f< 0, Fc, Fb); }
-:FCMOVGE Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02d & Fa & Fb & Fc { cmov(Fa f>= 0, Fc, Fb); }
-:FCMOVLE Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02e & Fa & Fb & Fc { cmov(Fa f<= 0, Fc, Fb); }
-:FCMOVGT Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02f & Fa & Fb & Fc { cmov(Fa f> 0, Fc, Fb); }
+# Floating-point branch and conditional-move tests compare the register bits (the same test
+# serves IEEE and VAX operands): zero is any value with bits 62:0 clear.
+fz: is Fa { local z:1 = (Fa & 0x7fffffffffffffff) == 0; export z; }
+fn: is Fa { local n:1 = Fa s< 0; export n; }
+:FCMOVEQ Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02a & Fa & Fb & Fc & fz      { cmov(fz, Fc, Fb); }
+:FCMOVNE Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02b & Fa & Fb & Fc & fz      { cmov(!fz, Fc, Fb); }
+:FCMOVLT Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02c & Fa & Fb & Fc & fz & fn { cmov(fn && !fz, Fc, Fb); }
+:FCMOVGE Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02d & Fa & Fb & Fc & fz & fn { cmov(!fn || fz, Fc, Fb); }
+:FCMOVLE Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02e & Fa & Fb & Fc & fz & fn { cmov(fn || fz, Fc, Fb); }
+:FCMOVGT Fa, Fb, Fc is opcode=0x17 & fpfunc=0x02f & Fa & Fb & Fc & fz & fn { cmov(!fn && !fz, Fc, Fb); }
 
 #=========================================================================
 # Integer/Floating moves and square root (opcode 0x14, ITFP)
 #=========================================================================
 
-define pcodeop int_to_float_f;    # ITOFF bit repack
-define pcodeop float_sqrt;
-
-# integer register -> floating register
-:ITOFS Ra, Fc is opcode=0x14 & fpfunc=0x004 & Ra & fb=31 & Fc { local s:4 = Ra:4; Fc = float2float(s); }
-:ITOFF Ra, Fc is opcode=0x14 & fpfunc=0x014 & Ra & fb=31 & Fc { Fc = int_to_float_f(Ra); }
+# integer register -> floating register (bit moves in the S, F and T register layouts)
+:ITOFS Ra, Fc is opcode=0x14 & fpfunc=0x004 & Ra & fb=31 & Fc { local s:4 = Ra:4; s2t(s, Fc); }
+:ITOFF Ra, Fc is opcode=0x14 & fpfunc=0x014 & Ra & fb=31 & Fc { local x:4 = Ra:4; f2g(x, Fc); }
 :ITOFT Ra, Fc is opcode=0x14 & fpfunc=0x024 & Ra & fb=31 & Fc { Fc = Ra; }
-
 
 #=========================================================================
 # IEEE (opcode 0x16) and VAX (opcode 0x15) floating-point arithmetic
 #
-# The 11-bit function code splits into an operation/precision part (fp_lo)
-# and a round/trap qualifier (fp_hi). The qualifier subtables decode every
-# documented suffix; the arithmetic is modeled with float p-code (S is
-# treated as a double here — adequate for analysis, not bit-exact rounding).
+# The 11-bit function code splits into an operation/precision part (fp_lo) and a round/trap
+# qualifier (fp_hi). The qualifier subtables decode every documented suffix; rmode gives the
+# rounding mode. Instructions in the normal rounding mode are plain float p-code.
 #=========================================================================
-
 # IEEE round/trap qualifier suffixes (Table C-3)
 ieeequal: ""      is fp_hi=0x02 { }
 ieeequal: "/C"    is fp_hi=0x00 { }
@@ -716,66 +996,114 @@ cmptqual: "/SU" is fp_hi=0x16 { }
 cmpgqual: ""    is fp_hi=0x02 { }
 cmpgqual: "/S"  is fp_hi=0x12 { }
 
-# square root; S results are rounded to single precision
-:SQRTF^vaxqual  Fb, Fc is opcode=0x14 & fp_lo=0x0a & vaxqual  & fa=31 & Fb & Fc { Fc = float_sqrt(Fb); }
-:SQRTG^vaxqual  Fb, Fc is opcode=0x14 & fp_lo=0x2a & vaxqual  & fa=31 & Fb & Fc { Fc = float_sqrt(Fb); }
-:SQRTS^ieeequal Fb, Fc is opcode=0x14 & fp_lo=0x0b & ieeequal & fa=31 & Fb & Fc { local r:4 = float2float(sqrt(Fb)); Fc = float2float(r); }
-:SQRTT^ieeequal Fb, Fc is opcode=0x14 & fp_lo=0x2b & ieeequal & fa=31 & Fb & Fc { Fc = sqrt(Fb); }
+# square root
+:SQRTF^vaxqual  Fb, Fc is opcode=0x14 & fp_lo=0x0a & vaxqual  & rmode & fa=31 & Fb & Fc { local r:8; f_sqrt(Fb, rmode, r); Fc = r; }
+:SQRTG^vaxqual  Fb, Fc is opcode=0x14 & fp_lo=0x2a & vaxqual  & rmode & fa=31 & Fb & Fc { local r:8; g_sqrt(Fb, rmode, r); Fc = r; }
+:SQRTS^ieeequal Fb, Fc is opcode=0x14 & fp_lo=0x0b & ieeequal & fprnd=2 & fa=31 & Fb & Fc { local r:4 = float2float(sqrt(Fb)); Fc = float2float(r); }
+:SQRTS^ieeequal Fb, Fc is opcode=0x14 & fp_lo=0x0b & ieeequal & fprnd!=2 & rmode & fa=31 & Fb & Fc { local r:8; s_sqrt(Fb, rmode, r); Fc = r; }
+:SQRTT^ieeequal Fb, Fc is opcode=0x14 & fp_lo=0x2b & ieeequal & fprnd=2 & fa=31 & Fb & Fc { Fc = sqrt(Fb); }
+:SQRTT^ieeequal Fb, Fc is opcode=0x14 & fp_lo=0x2b & ieeequal & fprnd!=2 & rmode & fa=31 & Fb & Fc { local r:8; t_sqrt(Fb, rmode, r); Fc = r; }
 
-:ADDS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x00 & ieeequal & Fa & Fb & Fc { local r:4 = float2float(Fa f+ Fb); Fc = float2float(r); }
+# IEEE single
+:ADDS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x00 & ieeequal & fprnd=2 & Fa & Fb & Fc { local r:4 = float2float(Fa f+ Fb); Fc = float2float(r); }
+:ADDS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x00 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; s_add(Fa, Fb, rmode, r); Fc = r; }
 # NEGS/NEGT are SUBS/SUBT F31,Fb,Fc: arithmetic, so the negation of +0 is +0
 :NEGS Fb, Fc is opcode=0x16 & fpfunc=0x081 & fa=31 & Fb & Fc { local z:8 = 0; local r:4 = float2float(z f- Fb); Fc = float2float(r); }
-:SUBS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x01 & ieeequal & Fa & Fb & Fc { local r:4 = float2float(Fa f- Fb); Fc = float2float(r); }
-:MULS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x02 & ieeequal & Fa & Fb & Fc { local r:4 = float2float(Fa f* Fb); Fc = float2float(r); }
-:DIVS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x03 & ieeequal & Fa & Fb & Fc { local r:4 = float2float(Fa f/ Fb); Fc = float2float(r); }
-:ADDT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x20 & ieeequal & Fa & Fb & Fc { Fc = Fa f+ Fb; }
+:SUBS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x01 & ieeequal & fprnd=2 & Fa & Fb & Fc { local r:4 = float2float(Fa f- Fb); Fc = float2float(r); }
+:SUBS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x01 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; s_sub(Fa, Fb, rmode, r); Fc = r; }
+:MULS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x02 & ieeequal & fprnd=2 & Fa & Fb & Fc { local r:4 = float2float(Fa f* Fb); Fc = float2float(r); }
+:MULS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x02 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; s_mul(Fa, Fb, rmode, r); Fc = r; }
+:DIVS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x03 & ieeequal & fprnd=2 & Fa & Fb & Fc { local r:4 = float2float(Fa f/ Fb); Fc = float2float(r); }
+:DIVS^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x03 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; s_div(Fa, Fb, rmode, r); Fc = r; }
+# IEEE double
+:ADDT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x20 & ieeequal & fprnd=2 & Fa & Fb & Fc { Fc = Fa f+ Fb; }
+:ADDT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x20 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; t_add(Fa, Fb, rmode, r); Fc = r; }
 :NEGT Fb, Fc is opcode=0x16 & fpfunc=0x0a1 & fa=31 & Fb & Fc { local z:8 = 0; Fc = z f- Fb; }
-:SUBT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x21 & ieeequal & Fa & Fb & Fc { Fc = Fa f- Fb; }
-:MULT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x22 & ieeequal & Fa & Fb & Fc { Fc = Fa f* Fb; }
-:DIVT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x23 & ieeequal & Fa & Fb & Fc { Fc = Fa f/ Fb; }
+:SUBT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x21 & ieeequal & fprnd=2 & Fa & Fb & Fc { Fc = Fa f- Fb; }
+:SUBT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x21 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; t_sub(Fa, Fb, rmode, r); Fc = r; }
+:MULT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x22 & ieeequal & fprnd=2 & Fa & Fb & Fc { Fc = Fa f* Fb; }
+:MULT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x22 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; t_mul(Fa, Fb, rmode, r); Fc = r; }
+:DIVT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x23 & ieeequal & fprnd=2 & Fa & Fb & Fc { Fc = Fa f/ Fb; }
+:DIVT^ieeequal Fa, Fb, Fc is opcode=0x16 & fp_lo=0x23 & ieeequal & fprnd!=2 & rmode & Fa & Fb & Fc { local r:8; t_div(Fa, Fb, rmode, r); Fc = r; }
 
 :CMPTUN^cmptqual Fa, Fb, Fc is opcode=0x16 & fp_lo=0x24 & cmptqual & Fa & Fb & Fc { Fc = zext(nan(Fa) || nan(Fb)) << 62; }
 :CMPTEQ^cmptqual Fa, Fb, Fc is opcode=0x16 & fp_lo=0x25 & cmptqual & Fa & Fb & Fc { Fc = zext(Fa f== Fb) << 62; }
 :CMPTLT^cmptqual Fa, Fb, Fc is opcode=0x16 & fp_lo=0x26 & cmptqual & Fa & Fb & Fc { Fc = zext(Fa f< Fb) << 62; }
 :CMPTLE^cmptqual Fa, Fb, Fc is opcode=0x16 & fp_lo=0x27 & cmptqual & Fa & Fb & Fc { Fc = zext(Fa f<= Fb) << 62; }
 
-# IEEE conversions (qualified). Convert-to-integer (CVTTQ) uses the V/SV
-# qualifier family; CVTST uses none//S. fp_lo distinguishes the operation.
-:CVTTS^ieeequal Fb, Fc is opcode=0x16 & fp_lo=0x2c & ieeequal & fa=31 & Fb & Fc { local s:4 = float2float(Fb); Fc = float2float(s); }
-:CVTTQ^cvtqual  Fb, Fc is opcode=0x16 & fp_lo=0x2f & cvtqual  & fa=31 & Fb & Fc { Fc = trunc(Fb); }
-:CVTQS^cvtqsqual Fb, Fc is opcode=0x16 & fp_lo=0x3c & cvtqsqual & fa=31 & Fb & Fc { local s:4 = int2float(Fb); Fc = float2float(s); }
-:CVTQT^cvtqsqual Fb, Fc is opcode=0x16 & fp_lo=0x3e & cvtqsqual & fa=31 & Fb & Fc { Fc = int2float(Fb); }
+# IEEE conversions. CVTTQ/C truncates; the other CVTTQ modes round as the qualifier says.
+:CVTTS^ieeequal Fb, Fc is opcode=0x16 & fp_lo=0x2c & ieeequal & fprnd=2 & fa=31 & Fb & Fc { local s:4 = float2float(Fb); Fc = float2float(s); }
+:CVTTS^ieeequal Fb, Fc is opcode=0x16 & fp_lo=0x2c & ieeequal & fprnd!=2 & rmode & fa=31 & Fb & Fc {
+  local rs:4 = float2float(Fb); local es:8 = Fb f- float2float(rs); round_s(rs, es, rmode, 0:1); Fc = float2float(rs);
+}
+:CVTTQ^cvtqual  Fb, Fc is opcode=0x16 & fp_lo=0x2f & cvtqual & fprnd=0 & fa=31 & Fb & Fc { Fc = trunc(Fb); }
+:CVTTQ^cvtqual  Fb, Fc is opcode=0x16 & fp_lo=0x2f & cvtqual & fprnd!=0 & rmode & fa=31 & Fb & Fc { local q:8; cvt_q(Fb, q, rmode); Fc = q; }
+:CVTQS^cvtqsqual Fb, Fc is opcode=0x16 & fp_lo=0x3c & cvtqsqual & fprnd=2 & fa=31 & Fb & Fc { local s:4 = int2float(Fb); Fc = float2float(s); }
+:CVTQS^cvtqsqual Fb, Fc is opcode=0x16 & fp_lo=0x3c & cvtqsqual & fprnd!=2 & rmode & fa=31 & Fb & Fc {
+  local rs:4 = int2float(Fb); local rd:8 = float2float(rs); local es:8; err_q(Fb, rd, es); round_s(rs, es, rmode, 0:1); Fc = float2float(rs);
+}
+:CVTQT^cvtqsqual Fb, Fc is opcode=0x16 & fp_lo=0x3e & cvtqsqual & fprnd=2 & fa=31 & Fb & Fc { Fc = int2float(Fb); }
+:CVTQT^cvtqsqual Fb, Fc is opcode=0x16 & fp_lo=0x3e & cvtqsqual & fprnd!=2 & rmode & fa=31 & Fb & Fc {
+  local r:8 = int2float(Fb); local e:8; err_q(Fb, r, e); round_t(r, e, rmode, 0:1); Fc = r;
+}
 :CVTST^cvstqual Fb, Fc is opcode=0x16 & fp_lo=0x2c & cvstqual & fa=31 & Fb & Fc { Fc = Fb; }
 
-:ADDF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x00 & vaxqual & Fa & Fb & Fc { Fc = Fa f+ Fb; }
-:NEGF Fb, Fc is opcode=0x15 & fpfunc=0x081 & fa=31 & Fb & Fc { Fc = Fb ^ 0x8000000000000000; }
-:SUBF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x01 & vaxqual & Fa & Fb & Fc { Fc = Fa f- Fb; }
-:MULF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x02 & vaxqual & Fa & Fb & Fc { Fc = Fa f* Fb; }
-:DIVF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x03 & vaxqual & Fa & Fb & Fc { Fc = Fa f/ Fb; }
-:ADDG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x20 & vaxqual & Fa & Fb & Fc { Fc = Fa f+ Fb; }
-:NEGG Fb, Fc is opcode=0x15 & fpfunc=0x0a1 & fa=31 & Fb & Fc { Fc = Fb ^ 0x8000000000000000; }
-:SUBG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x21 & vaxqual & Fa & Fb & Fc { Fc = Fa f- Fb; }
-:MULG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x22 & vaxqual & Fa & Fb & Fc { Fc = Fa f* Fb; }
-:DIVG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x23 & vaxqual & Fa & Fb & Fc { Fc = Fa f/ Fb; }
+# VAX F and G arithmetic (G-layout registers)
+:ADDF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x00 & vaxqual & rmode & Fa & Fb & Fc { local r:8; f_add(Fa, Fb, rmode, r); Fc = r; }
+:NEGF Fb, Fc is opcode=0x15 & fpfunc=0x081 & fa=31 & Fb & Fc { Fc = zext((Fb & 0x7ff0000000000000) != 0) * (Fb ^ 0x8000000000000000); }
+:SUBF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x01 & vaxqual & rmode & Fa & Fb & Fc { local r:8; f_sub(Fa, Fb, rmode, r); Fc = r; }
+:MULF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x02 & vaxqual & rmode & Fa & Fb & Fc { local r:8; f_mul(Fa, Fb, rmode, r); Fc = r; }
+:DIVF^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x03 & vaxqual & rmode & Fa & Fb & Fc { local r:8; f_div(Fa, Fb, rmode, r); Fc = r; }
+:ADDG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x20 & vaxqual & rmode & Fa & Fb & Fc { local r:8; g_add(Fa, Fb, rmode, r); Fc = r; }
+:NEGG Fb, Fc is opcode=0x15 & fpfunc=0x0a1 & fa=31 & Fb & Fc { Fc = zext((Fb & 0x7ff0000000000000) != 0) * (Fb ^ 0x8000000000000000); }
+:SUBG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x21 & vaxqual & rmode & Fa & Fb & Fc { local r:8; g_sub(Fa, Fb, rmode, r); Fc = r; }
+:MULG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x22 & vaxqual & rmode & Fa & Fb & Fc { local r:8; g_mul(Fa, Fb, rmode, r); Fc = r; }
+:DIVG^vaxqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x23 & vaxqual & rmode & Fa & Fb & Fc { local r:8; g_div(Fa, Fb, rmode, r); Fc = r; }
 
-:CMPGEQ^cmpgqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x25 & cmpgqual & Fa & Fb & Fc { Fc = zext(Fa f== Fb) << 62; }
-:CMPGLT^cmpgqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x26 & cmpgqual & Fa & Fb & Fc { Fc = zext(Fa f< Fb) << 62; }
-:CMPGLE^cmpgqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x27 & cmpgqual & Fa & Fb & Fc { Fc = zext(Fa f<= Fb) << 62; }
+# VAX compares (true = 0.5 in G format)
+:CMPGEQ^cmpgqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x25 & cmpgqual & Fa & Fb & Fc { local x:8; g2t(Fa, x); local y:8; g2t(Fb, y); Fc = zext(x f== y) << 62; }
+:CMPGLT^cmpgqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x26 & cmpgqual & Fa & Fb & Fc { local x:8; g2t(Fa, x); local y:8; g2t(Fb, y); Fc = zext(x f< y) << 62; }
+:CMPGLE^cmpgqual Fa, Fb, Fc is opcode=0x15 & fp_lo=0x27 & cmpgqual & Fa & Fb & Fc { local x:8; g2t(Fa, x); local y:8; g2t(Fb, y); Fc = zext(x f<= y) << 62; }
 
-# VAX conversions (qualified). CVTGQ (to integer) uses its own /V family;
-# the others use the VAX U/SU family. CVTQF/CVTQG only define none and /C.
-define pcodeop cvt_d_to_g;
-define pcodeop cvt_g_to_d;
-define pcodeop cvt_g_to_f;
-define pcodeop cvt_g_to_q;
-define pcodeop cvt_q_to_f;
-define pcodeop cvt_q_to_g;
-:CVTDG^vaxqual  Fb, Fc is opcode=0x15 & fp_lo=0x1e & vaxqual  & fa=31 & Fb & Fc { Fc = cvt_d_to_g(Fb); }
-:CVTGD^vaxqual  Fb, Fc is opcode=0x15 & fp_lo=0x2d & vaxqual  & fa=31 & Fb & Fc { Fc = cvt_g_to_d(Fb); }
-:CVTGF^vaxqual  Fb, Fc is opcode=0x15 & fp_lo=0x2c & vaxqual  & fa=31 & Fb & Fc { Fc = cvt_g_to_f(Fb); }
-:CVTGQ^cvtgqual Fb, Fc is opcode=0x15 & fp_lo=0x2f & cvtgqual & fa=31 & Fb & Fc { Fc = cvt_g_to_q(Fb); }
-:CVTQF^cvtqfqual Fb, Fc is opcode=0x15 & fp_lo=0x3c & cvtqfqual & fa=31 & Fb & Fc { Fc = cvt_q_to_f(Fb); }
-:CVTQG^cvtqfqual Fb, Fc is opcode=0x15 & fp_lo=0x3e & cvtqfqual & fa=31 & Fb & Fc { Fc = cvt_q_to_g(Fb); }
+# VAX D (register: sign, 8-bit exponent bias 128, 55-bit fraction) -> double; e has the sign
+# of exact - t, tie marks an exact halfway case
+macro d2t(d, t, e, tie) {
+  local ex:8 = (d >> 55) & 0xff;
+  local f:8 = (d & 0x007fffffffffffff) | 0x0080000000000000;
+  local r:8 = int2float(f);
+  local back:8 = trunc(r);
+  local sc:8 = (ex + 839) << 52;
+  local nz:1 = ex != 0;
+  t = zext(nz) * ((r f* sc) | (d & 0x8000000000000000));
+  local ee:8 = zext(f > back) * 0x3ff0000000000000 + zext(f < back) * 0xbff0000000000000;
+  e = zext(nz) * (ee ^ (d & 0x8000000000000000));
+  tie = nz && ((f & 7) == 4);
+}
+# G -> D: the exponent is rebased and the fraction widened (exact; out of D range gives 0)
+macro g2d(g, d) {
+  local ex:8 = (g >> 52) & 0x7ff;
+  local ok:1 = ex > 896 && ex < 1152;
+  d = zext(ok) * ((g & 0x8000000000000000) | ((ex - 896) << 55) | ((g & 0x000fffffffffffff) << 3));
+}
+
+# VAX conversions. CVTGQ (to integer) uses its own /V family; the others use the VAX U/SU
+# family. CVTQF/CVTQG only define none and /C.
+:CVTDG^vaxqual  Fb, Fc is opcode=0x15 & fp_lo=0x1e & vaxqual & rmode & fa=31 & Fb & Fc {
+  local t:8; local e:8; local tie:1; d2t(Fb, t, e, tie);
+  local tv:1 = tie && (rmode == 2);
+  round_t(t, e, rmode, tv); local r:8; t2g(t, r); Fc = r;
+}
+:CVTGD^vaxqual  Fb, Fc is opcode=0x15 & fp_lo=0x2d & vaxqual & fa=31 & Fb & Fc { local d:8; g2d(Fb, d); Fc = d; }
+:CVTGF^vaxqual  Fb, Fc is opcode=0x15 & fp_lo=0x2c & vaxqual & rmode & fa=31 & Fb & Fc { local x:8; g2t(Fb, x); local r:8; f_fin(x, 0:8, rmode, r); Fc = r; }
+:CVTGQ^cvtgqual Fb, Fc is opcode=0x15 & fp_lo=0x2f & cvtgqual & rmode & fa=31 & Fb & Fc { local x:8; g2t(Fb, x); local m:1 = rmode + rmode; local q:8; cvt_q(x, q, m); Fc = q; }
+:CVTQF^cvtqfqual Fb, Fc is opcode=0x15 & fp_lo=0x3c & cvtqfqual & rmode & fa=31 & Fb & Fc {
+  local rs:4 = int2float(Fb); local rd:8 = float2float(rs); local es:8; err_q(Fb, rd, es);
+  local tie:1; tie_s(rs, es, 1:1, tie); local tv:1 = tie && (rmode == 2);
+  round_s(rs, es, rmode, tv); local rt:8 = float2float(rs); local r:8; t2g(rt, r); Fc = r;
+}
+:CVTQG^cvtqfqual Fb, Fc is opcode=0x15 & fp_lo=0x3e & cvtqfqual & rmode & fa=31 & Fb & Fc {
+  local t:8 = int2float(Fb); local e:8; err_q(Fb, t, e); local r:8; g_fin(t, e, rmode, 1:1, r); Fc = r;
+}
 
 # byte mask from the low 8 bits of op: byte i is 0xff when bit i is set. Written without
 # branches so a constant mask folds (ZAPNOT x,0xf becomes x & 0xffffffff).
@@ -795,21 +1123,20 @@ macro bytemask(bits, m) {
 #=========================================================================
 
 # Memory Format Floating-Point Instructions
-# VAX F/G loads and stores are modelled as plain bit moves (the F-format register
-# mapping is not expanded). S-format loads/stores convert between single and the
-# register's double (T) format.
+# Loads and stores map the memory formats to the register layouts bit for bit: S to T layout,
+# F to G layout, and G with its 16-bit words reversed (VAX word order).
 Fa_lhs: fa is fa { export fa; }
-:LDF Fa_lhs, disp_regb is opcode=0x20 & Fa_lhs & disp_regb { Fa_lhs = zext(*:4 disp_regb); }
-:LDG Fa_lhs, disp_regb is opcode=0x21 & Fa_lhs & disp_regb { Fa_lhs = *:8 disp_regb; }
-:LDS Fa_lhs, disp_regb is opcode=0x22 & Fa_lhs & disp_regb { local s:4 = *:4 disp_regb; Fa_lhs = float2float(s); }
+:LDF Fa_lhs, disp_regb is opcode=0x20 & Fa_lhs & disp_regb { local x:4 = *:4 disp_regb; f2g(x, Fa_lhs); }
+:LDG Fa_lhs, disp_regb is opcode=0x21 & Fa_lhs & disp_regb { local x:8 = *:8 disp_regb; gswap(x, Fa_lhs); }
+:LDS Fa_lhs, disp_regb is opcode=0x22 & Fa_lhs & disp_regb { local s:4 = *:4 disp_regb; s2t(s, Fa_lhs); }
 :LDT Fa_lhs, disp_regb is opcode=0x23 & Fa_lhs & disp_regb { Fa_lhs = *:8 disp_regb; }
 
-:STF Fa, disp_regb is opcode=0x24 & Fa & disp_regb { *:4 disp_regb = Fa:4; }
-:STG Fa, disp_regb is opcode=0x25 & Fa & disp_regb { *:8 disp_regb = Fa; }
-:STS Fa, disp_regb is opcode=0x26 & Fa & disp_regb { local s:4 = float2float(Fa); *:4 disp_regb = s; }
+:STF Fa, disp_regb is opcode=0x24 & Fa & disp_regb { local x:4; g2f(Fa, x); *:4 disp_regb = x; }
+:STG Fa, disp_regb is opcode=0x25 & Fa & disp_regb { local x:8; gswap(Fa, x); *:8 disp_regb = x; }
+:STS Fa, disp_regb is opcode=0x26 & Fa & disp_regb { local s:4; t2s(Fa, s); *:4 disp_regb = s; }
 :STT Fa, disp_regb is opcode=0x27 & Fa & disp_regb { *:8 disp_regb = Fa; }
 
-# Branch Format Floating-Point Instructions
+# Branch Format Floating-Point Instructions (bit tests, as FCMOVxx)
 :FB^fcc Fa, disp_pc is bcode=0x3 & fcc & Fa & disp_pc { if (fcc) goto disp_pc; }
 
 #=========================================================================
